@@ -59,5 +59,25 @@ else
 fi
 rm -rf "$tmp"
 
+# Synthetic ENOENT error propagation test: child execve returns ENOENT (127), not ENOSYS
+out=$("$PROOT" -R "$ROOTFS" /bin/sh -c "/nonexistent_binary_for_test 2>&1; echo status=\$?" 2>/dev/null)
+if [[ "$out" == *"127"* && "$out" != *"Function not implemented"* ]]; then
+	pass "synthetic ENOENT propagation"
+else
+	fail "synthetic ENOENT propagation (got: $out)"
+fi
+
+# Synthetic EACCES error propagation test: child execve on non-executable returns EACCES (126), not ENOSYS
+tmp_noexec=$(mktemp)
+chmod 0644 "$tmp_noexec"
+out=$("$PROOT" -R "$ROOTFS" /bin/sh -c "$tmp_noexec 2>&1; echo status=\$?" 2>/dev/null)
+if [[ "$out" == *"126"* && "$out" != *"Function not implemented"* ]]; then
+	pass "synthetic EACCES propagation"
+else
+	fail "synthetic EACCES propagation (got: $out)"
+fi
+rm -f "$tmp_noexec"
+
 echo "== functional: $([ $FAILS -eq 0 ] && echo PASS || echo FAIL) ($FAILS failures) =="
 exit $FAILS
+
