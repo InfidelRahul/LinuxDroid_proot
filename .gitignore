@@ -23,3 +23,16 @@ test/*
 !test/*.py
 !test/*.mk
 !test/docker
+
+# ---- LinuxDroid-PRoot additions ----
+build/
+third_party/talloc/*.o
+third_party/talloc/*.a
+tools/selftest/linuxdroid-selftest
+native/android/*.o
+
+# GitHub Actions workflow files cannot be committed with this repo's GitHub App
+# token (missing 'workflows' permission).  The tracked reference copies live in
+# docs/ci/.  To enable CI, remove the next two lines and commit the files.
+/.github/workflows/ci.yml
+/.github/workflows/release.yml

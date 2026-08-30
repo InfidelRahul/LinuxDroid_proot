@@ -1,0 +1,18 @@
+talloc is a component of the Samba project.
+
+Copyright (C) Andrew Tridgell 2004-2010
+Copyright (C) Stefan Metzmacher 2006
+Copyright (C) Jelmer Vernooij 2007-2009
+Copyright (C) Rusty Russell 2010
+
+talloc is licensed under the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 3 of the License, or (at your
+option) any later version.
+
+This vendored copy (talloc.c / talloc.h, taken from samba-talloc-2.4.2) is
+provided so that LinuxDroid-PRoot builds are self-contained and do not require
+a system libtalloc / pkg-config.  The accompanying `replace.h` is a
+LinuxDroid-PRoot file that provides the small set of feature-detection macros
+talloc expects from the Samba build system.
+
+See https://www.gnu.org/licenses/lgpl-3.0.html for the full license text.
