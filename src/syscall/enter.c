@@ -122,6 +122,7 @@ int translate_syscall_enter(Tracee *tracee)
 		break;
 
 	case PR_execve:
+	case PR_execveat:
 		status = translate_execve_enter(tracee);
 		break;
 

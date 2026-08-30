@@ -316,7 +316,7 @@ int fetch_array_of_xpointers(Tracee *tracee, ArrayOfXPointers **array_, Reg reg,
 		return -ENOMEM;
 	array = *array_;
 
-	address = peek_reg(tracee, CURRENT, reg);
+	address = UNTAG_ADDRESS(peek_reg(tracee, CURRENT, reg));
 
 	for (i = 0; nb_entries != 0 ? i < nb_entries : pointer != 0; i++) {
 		void *tmp = talloc_realloc(array, array->_xpointers, XPointer, i + 1);
@@ -328,7 +328,7 @@ int fetch_array_of_xpointers(Tracee *tracee, ArrayOfXPointers **array_, Reg reg,
 		if (errno != 0)
 			return -errno;
 
-		array->_xpointers[i].remote = pointer;
+		array->_xpointers[i].remote = UNTAG_ADDRESS(pointer);
 		array->_xpointers[i].local = NULL;
 	}
 	array->length = i;

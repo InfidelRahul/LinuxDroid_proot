@@ -263,6 +263,8 @@ static const Sysnum sysnums_arm64[] = {
 	[ 274 ] = PR_sched_setattr,
 	[ 275 ] = PR_sched_getattr,
 	[ 276 ] = PR_renameat2,
+	[ 281 ] = PR_execveat,
 	[ 291 ] = PR_statx,
         [ 435 ] = PR_clone3,
+	[ 439 ] = PR_faccessat2,
 };

@@ -21,6 +21,9 @@
  */
 
 #include <errno.h>       /* errno(3), E* */
+#include <unistd.h>      /* faccessat(2), access(2), */
+#include <fcntl.h>       /* AT_*, */
+#include <sys/stat.h>   /* struct stat, fstatat, */
 #include <sys/utsname.h> /* struct utsname, */
 #include <linux/net.h>   /* SYS_*, */
 #include <string.h>      /* strlen(3), */
@@ -428,6 +431,7 @@ void translate_syscall_exit(Tracee *tracee)
 #endif
 
 	case PR_execve:
+	case PR_execveat:
 		translate_execve_exit(tracee);
 		goto end;
 
@@ -459,6 +463,34 @@ void translate_syscall_exit(Tracee *tracee)
 
 		/* Don't overwrite the syscall result.  */
 		goto end;
+
+	case PR_faccessat2: {
+		if ((int) syscall_result == -ENOSYS) {
+			int dirfd = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
+			char path[PATH_MAX];
+			int mode = (int) peek_reg(tracee, ORIGINAL, SYSARG_3);
+			int flags = (int) peek_reg(tracee, ORIGINAL, SYSARG_4);
+			status = get_sysarg_path(tracee, path, SYSARG_2);
+			if (status >= 0) {
+				char host_path[PATH_MAX];
+				status = translate_path(tracee, host_path, dirfd, path, true);
+				if (status >= 0) {
+					int res;
+					if (flags == 0) {
+						res = faccessat(AT_FDCWD, host_path, mode, 0);
+					} else if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
+						struct stat st;
+						res = fstatat(AT_FDCWD, host_path, &st, AT_SYMLINK_NOFOLLOW);
+					} else {
+						res = faccessat(AT_FDCWD, host_path, mode, flags);
+					}
+					status = (res < 0) ? -errno : 0;
+					break;
+				}
+			}
+		}
+		goto end;
+	}
 
 	default:
 		goto end;

@@ -231,7 +231,7 @@ $(BUILD_DIR)/x86_64:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-test: proot
+test: proot loader
 	@echo "  TEST host (LinuxDroid test suites)"
 	@tests/functional/run.sh
 	@tests/seccomp/run.sh

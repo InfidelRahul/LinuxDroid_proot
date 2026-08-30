@@ -31,6 +31,7 @@
 #include "tracee/tracee.h"
 #include "tracee/reg.h"
 #include "tracee/mem.h"
+#include "cli/note.h"
 
 /**
  * Copy in @path a C string (PATH_MAX bytes max.) from the @tracee's
@@ -44,6 +45,7 @@ int get_sysarg_path(const Tracee *tracee, char path[PATH_MAX], Reg reg)
 	word_t src;
 
 	src = peek_reg(tracee, CURRENT, reg);
+	src = UNTAG_ADDRESS(src);
 
 	/* Check if the parameter is not NULL. Technically we should
 	 * not return an -EFAULT for this special value since it is
@@ -75,13 +77,17 @@ static int set_sysarg_data(Tracee *tracee, const void *tracer_ptr, word_t size, 
 
 	/* Allocate space into the tracee's memory to host the new data. */
 	tracee_ptr = alloc_mem(tracee, size);
-	if (tracee_ptr == 0)
+	if (tracee_ptr == 0) {
+		note(tracee, ERROR, INTERNAL, "set_sysarg_data: alloc_mem(%zd) failed (stack underflow)", (size_t) size);
 		return -EFAULT;
+	}
 
 	/* Copy the new data into the previously allocated space. */
 	status = write_data(tracee, tracee_ptr, tracer_ptr, size);
-	if (status < 0)
+	if (status < 0) {
+		note(tracee, ERROR, SYSTEM, "set_sysarg_data: write_data(0x%lx, %zd) failed: %s", tracee_ptr, (size_t) size, strerror(-status));
 		return status;
+	}
 
 	/* Make this argument point to the new data. */
 	poke_reg(tracee, reg, tracee_ptr);
@@ -134,9 +140,16 @@ void translate_syscall(Tracee *tracee)
 		 * avoid the actual syscall if an error was reported
 		 * by the translation/extension. */
 		if (status < 0) {
+			Sysnum orig_sysnum = get_sysnum(tracee, ORIGINAL);
 			set_sysnum(tracee, PR_void);
 			poke_reg(tracee, SYSARG_RESULT, (word_t) status);
 			tracee->status = status;
+			if (tracee->seccomp == ENABLED) {
+				tracee->restart_how = PTRACE_SYSCALL;
+				tracee->sysexit_pending = true;
+			}
+			note(tracee, INFO, INTERNAL, "[SYSCALL_ENTER_ERR] pid=%d: sysnum=%ld (%s) status=%d -> PR_void, restart_how=%d, sysexit_pending=%d",
+				tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum), status, tracee->restart_how, tracee->sysexit_pending);
 		}
 		else
 			tracee->status = 1;
@@ -156,6 +169,9 @@ void translate_syscall(Tracee *tracee)
 
 		print_current_regs(tracee, 5, "sysexit start");
 
+		int prev_status = tracee->status;
+		Sysnum orig_sysnum = get_sysnum(tracee, ORIGINAL);
+
 		/* Translate the syscall only if it was actually
 		 * requested by the tracee, it is not a syscall
 		 * chained by PRoot.  */
@@ -163,6 +179,11 @@ void translate_syscall(Tracee *tracee)
 			translate_syscall_exit(tracee);
 		else
 			(void) notify_extensions(tracee, SYSCALL_CHAINED_EXIT, 0, 0);
+
+		if (prev_status < 0) {
+			note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) tracee_status=%d -> result=%ld",
+				tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum), prev_status, (long)peek_reg(tracee, CURRENT, SYSARG_RESULT));
+		}
 
 		/* Reset the tracee's status. */
 		tracee->status = 0;

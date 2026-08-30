@@ -31,32 +31,6 @@
 
 #include "arch.h" /* word_t, */
 #include "tracee/tracee.h"
-#include "untag.h" /* UNTAG_WORD, ARM64 tag normalization, */
-
-/**
- * Convert a tracee (guest) virtual address into the kernel-safe form
- * expected by the memory-access interfaces used by this subsystem:
- * ptrace(2) PTRACE_PEEKDATA / PTRACE_POKEDATA and process_vm_readv(2) /
- * process_vm_writev(2).
- *
- * On ARM64, Android allocators (scudo/MTE, HWASan, ...) may hand the
- * tracee pointers whose top byte carries a TBI tag (e.g. 0xb4...).
- * The tracee hardware ignores that byte, but the kernel rejects it in
- * these interfaces with EINVAL/EFAULT.  This is the single place where
- * tracee addresses are sanitized: every kernel-facing operation in
- * tracee/mem.c (process_vm fast path and ptrace fallback alike) goes
- * through addresses normalized here, and the ptrace emulator
- * (ptrace/ptrace.c) reuses it for the guest's own PEEK/POKE requests.
- *
- * This deliberately does NOT canonicalize or validate the address (tag
- * removal is neither), and must never be applied to host pointers,
- * register values, syscall-argument integers, sizes, or offsets.  It is
- * the identity on non-aarch64 architectures.
- */
-static inline word_t normalize_tracee_address(word_t address)
-{
-	return (word_t) UNTAG_WORD((uintptr_t) address);
-}
 
 extern int write_data(const Tracee *tracee, word_t dest_tracee, const void *src_tracer, word_t size);
 extern int writev_data(const Tracee *tracee, word_t dest_tracee, const struct iovec *src_tracer, int src_tracer_count);

@@ -63,6 +63,7 @@ typedef struct {
 
 /* List of syscalls handled by this extensions.  */
 static FilteredSysnum filtered_sysnums[] = {
+	{ PR_capget,		FILTER_SYSEXIT },
 	{ PR_capset,		FILTER_SYSEXIT },
 	{ PR_chmod,		FILTER_SYSEXIT },
 	{ PR_chown,		FILTER_SYSEXIT },
@@ -257,6 +258,14 @@ static int handle_sysenter_end(Tracee *tracee, const Config *config)
 	case PR_setfsuid32:
 	case PR_setfsgid:
 	case PR_setfsgid32:
+	case PR_setgroups:
+	case PR_setgroups32:
+	case PR_getgroups:
+	case PR_getgroups32:
+	case PR_capset:
+	case PR_capget:
+	case PR_setdomainname:
+	case PR_sethostname:
 		/* These syscalls are fully emulated.  */
 		set_sysnum(tracee, PR_void);
 		return 0;
@@ -294,12 +303,6 @@ static int handle_sysenter_end(Tracee *tracee, const Config *config)
 
 		return 0;
 	}
-
-	case PR_setgroups:
-	case PR_setgroups32:
-	case PR_getgroups:
-	case PR_getgroups32:
-		/* TODO */
 
 	default:
 		return 0;
@@ -579,13 +582,68 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		POKE_MEM_ID(SYSARG_3, sgid);
 		return 0;
 
-	case PR_setdomainname:
-	case PR_sethostname:
 	case PR_setgroups:
-	case PR_setgroups32:
+	case PR_setgroups32: {
+		/* Privileged processes (config->euid == 0) may set supplementary groups */
+		if (config->euid != 0)
+			return -EPERM;
+
+		poke_reg(tracee, SYSARG_RESULT, 0);
+		return 0;
+	}
+
+	case PR_getgroups:
+	case PR_getgroups32: {
+		int size = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		word_t list = peek_reg(tracee, ORIGINAL, SYSARG_2);
+
+		if (size < 0)
+			return -EINVAL;
+
+		if (size == 0) {
+			poke_reg(tracee, SYSARG_RESULT, 1);
+			return 0;
+		}
+
+		if (list != 0) {
+			poke_uint32(tracee, list, (uint32_t)config->rgid);
+			if (errno != 0)
+				return -errno;
+		}
+
+		poke_reg(tracee, SYSARG_RESULT, 1);
+		return 0;
+	}
+
+	case PR_capset: {
+		if (config->euid != 0)
+			return -EPERM;
+
+		poke_reg(tracee, SYSARG_RESULT, 0);
+		return 0;
+	}
+
+	case PR_capget: {
+		word_t datap = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		if (datap != 0 && config->euid == 0) {
+			uint32_t caps[6] = { 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU };
+			(void) write_data(tracee, datap, caps, sizeof(caps));
+		}
+		poke_reg(tracee, SYSARG_RESULT, 0);
+		return 0;
+	}
+
+	case PR_setdomainname:
+	case PR_sethostname: {
+		if (config->euid != 0)
+			return -EPERM;
+
+		poke_reg(tracee, SYSARG_RESULT, 0);
+		return 0;
+	}
+
 	case PR_mknod:
 	case PR_mknodat:
-	case PR_capset:
 	case PR_setxattr:
 	case PR_lsetxattr:
 	case PR_fsetxattr:
@@ -601,9 +659,9 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 	case PR_fchownat: {
 		word_t result;
 
-		/* Override only permission errors.  */
+		/* Override permission and unsupported errors when acting as root.  */
 		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-		if ((int) result != -EPERM)
+		if ((int) result != -EPERM && (int) result != -EACCES && (int) result != -ENOSYS && (int) result != -EROFS)
 			return 0;
 
 		/* Force success if the tracee was supposed to have

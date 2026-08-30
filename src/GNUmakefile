@@ -21,12 +21,6 @@ PYTHON_EMBED = $(shell ${PYTHON} -c "import sys; print('--embed' if sys.hexversi
 HAS_PYTHON_CONFIG := $(shell ${PYTHON}-config --ldflags ${PYTHON_EMBED} 2>/dev/null)
 
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$(VPATH) -I$(VPATH)/../lib/uthash/include
-# LinuxDroid Android compatibility boundary: tracee/mem.h includes
-# native/android/untag.h (ARM64 tracee-address normalization).  Resolve it
-# relative to this makefile so both in-tree (make -C src) and out-of-tree
-# (build/<abi>/ copies, where ../native/android is populated by the top
-# Makefile, like lib/uthash) builds find it.
-CPPFLAGS += -I$(VPATH)/../native/android
 CFLAGS   += -g -Wall -Wextra -O2
 CFLAGS   += $(shell pkg-config --cflags talloc)
 LDFLAGS  += -Wl,-z,noexecstack
@@ -252,8 +246,10 @@ LOADER$1_OBJECTS = loader/loader$1.o loader/assembly$1.o
 $(eval $(call define_from_arch.h,$1,LOADER_ARCH_CFLAGS))
 $(eval $(call define_from_arch.h,$1,LOADER_ADDRESS))
 
+LOADER_ADDR_OPT := $(shell if $(CC) -Wl,--image-base=0x1000 -nostdlib -x c /dev/null -o /dev/null 2>/dev/null; then echo "--image-base="; else echo "-Ttext="; fi)
+
 LOADER_CFLAGS$1  += -fPIC -ffreestanding $(LOADER_ARCH_CFLAGS$1)
-LOADER_LDFLAGS$1 += -static -nostdlib -Wl$(BUILD_ID_NONE),-Ttext=$(LOADER_ADDRESS$1),-z,noexecstack
+LOADER_LDFLAGS$1 += -static -nostdlib -Wl$(BUILD_ID_NONE),$$(LOADER_ADDR_OPT)$(LOADER_ADDRESS$1),-z,noexecstack
 
 loader/loader$1.o: loader/loader.c
 	@mkdir -p $$(dir $$@)

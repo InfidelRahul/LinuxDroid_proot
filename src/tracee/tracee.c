@@ -42,6 +42,7 @@
 #include "ptrace/wait.h"
 #include "extension/extension.h"
 #include "cli/note.h"
+#include "tracee/mem.h"
 
 #include "compat.h"
 

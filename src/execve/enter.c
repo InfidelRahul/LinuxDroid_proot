@@ -137,20 +137,28 @@ int translate_and_check_exec(Tracee *tracee, char host_path[PATH_MAX], const cha
 		return -ENOEXEC;
 
 	status = translate_path(tracee, host_path, AT_FDCWD, user_path, true);
-	if (status < 0)
+	if (status < 0) {
+		note(tracee, ERROR, SYSTEM, "translate_path('%s') failed: %s", user_path, strerror(-status));
 		return status;
+	}
 
 	status = access(host_path, F_OK);
-	if (status < 0)
+	if (status < 0) {
+		note(tracee, ERROR, SYSTEM, "access(F_OK, '%s' [user: '%s']) failed: %s", host_path, user_path, strerror(errno));
 		return -ENOENT;
+	}
 
 	status = access(host_path, X_OK);
-	if (status < 0)
+	if (status < 0) {
+		note(tracee, ERROR, SYSTEM, "access(X_OK, '%s' [user: '%s']) failed: %s", host_path, user_path, strerror(errno));
 		return -EACCES;
+	}
 
 	status = lstat(host_path, &statl);
-	if (status < 0)
+	if (status < 0) {
+		note(tracee, ERROR, SYSTEM, "lstat('%s' [user: '%s']) failed: %s", host_path, user_path, strerror(errno));
 		return -EPERM;
+	}
 
 	return 0;
 }
@@ -583,6 +591,7 @@ int translate_execve_enter(Tracee *tracee)
 	int status;
 
 	if (IS_NOTIFICATION_PTRACED_LOAD_DONE(tracee)) {
+		note(tracee, INFO, INTERNAL, "[LOAD_DONE_ENTER] pid=%d notification execve received from loader", tracee->pid);
 		/* Syscalls can now be reported to its ptracer.  */
 		tracee->as_ptracee.ignore_loader_syscalls = false;
 
@@ -592,9 +601,34 @@ int translate_execve_enter(Tracee *tracee)
 		return 0;
 	}
 
-	status = get_sysarg_path(tracee, user_path, SYSARG_1);
-	if (status < 0)
+	Sysnum sysnum = get_sysnum(tracee, CURRENT);
+	Reg path_reg = (sysnum == PR_execveat) ? SYSARG_2 : SYSARG_1;
+	word_t raw_path_addr = peek_reg(tracee, CURRENT, path_reg);
+	word_t norm_path_addr = UNTAG_ADDRESS(raw_path_addr);
+
+	note(tracee, INFO, INTERNAL, "[EXECVE_ENTER] pid=%d, sysnum=%d, raw_path=0x%lx, normalized=0x%lx, x1=0x%lx, x2=0x%lx, sp=0x%lx, pc=0x%lx",
+		tracee->pid,
+		(int)sysnum,
+		raw_path_addr,
+		norm_path_addr,
+		peek_reg(tracee, CURRENT, SYSARG_2),
+		peek_reg(tracee, CURRENT, SYSARG_3),
+		peek_reg(tracee, CURRENT, STACK_POINTER),
+		peek_reg(tracee, CURRENT, INSTR_POINTER));
+
+	status = get_sysarg_path(tracee, user_path, path_reg);
+	if (status < 0) {
+		int saved_errno = -status;
+		note(tracee, ERROR, INTERNAL, "[EXECVE_PATH_FAIL] pid=%d, get_sysarg_path failed: %s (errno=%d, path_reg=0x%lx, untagged=0x%lx)",
+			tracee->pid,
+			strerror(saved_errno),
+			saved_errno,
+			raw_path_addr,
+			norm_path_addr);
 		return status;
+	}
+
+	note(tracee, INFO, INTERNAL, "[EXECVE_PATH_OK] pid=%d, path='%s' (bytes=%d)", tracee->pid, user_path, status);
 
 	/* Remember the user path before it is overwritten by
 	 * expand_shebang().  This "raw" path is useful to fix the
@@ -604,10 +638,17 @@ int translate_execve_enter(Tracee *tracee)
 		return -ENOMEM;
 
 	status = expand_shebang(tracee, host_path, user_path);
-	if (status < 0)
+	if (status < 0) {
+		int saved_errno = -status;
+		note(tracee, ERROR, INTERNAL, "[SHEBANG_FAIL] pid=%d, expand_shebang('%s') failed: %s (errno=%d)",
+			tracee->pid, user_path, strerror(saved_errno), saved_errno);
 		/* The Linux kernel actually returns -EACCES when
 		 * trying to execute a directory.  */
 		return status == -EISDIR ? -EACCES : status;
+	}
+
+	note(tracee, INFO, INTERNAL, "[SHEBANG_OK] pid=%d, user_path='%s', host_path='%s', has_shebang=%d",
+		tracee->pid, user_path, host_path, status);
 
 	/* user_path is modified only if there's an interpreter
 	 * (ie. for a script or with qemu).  */
@@ -653,13 +694,32 @@ int translate_execve_enter(Tracee *tracee)
 		return -ENOMEM;
 
 	status = extract_load_info(tracee, tracee->load_info);
-	if (status < 0)
+	if (status < 0) {
+		int saved_errno = -status;
+		note(tracee, ERROR, INTERNAL, "[EXTRACT_LOAD_INFO_FAIL] pid=%d, extract_load_info('%s') failed: %s (errno=%d)",
+			tracee->pid, host_path, strerror(saved_errno), saved_errno);
 		return status;
+	}
+
+	note(tracee, INFO, INTERNAL, "[LOAD_INFO_OK] pid=%d, host_path='%s', entry=0x%lx, phnum=%d",
+		tracee->pid, host_path,
+		(unsigned long)ELF_FIELD(tracee->load_info->elf_header, entry),
+		(int)ELF_FIELD(tracee->load_info->elf_header, phnum));
 
 	if (tracee->load_info->interp != NULL) {
 		status = extract_load_info(tracee, tracee->load_info->interp);
-		if (status < 0)
+		if (status < 0) {
+			int saved_errno = -status;
+			note(tracee, ERROR, INTERNAL, "[INTERP_EXTRACT_FAIL] pid=%d, extract_load_info(interp '%s') failed: %s (errno=%d)",
+				tracee->pid, tracee->load_info->interp->host_path, strerror(saved_errno), saved_errno);
 			return status;
+		}
+
+		note(tracee, INFO, INTERNAL, "[INTERP_OK] pid=%d, guest_interp='%s', host_interp='%s', entry=0x%lx",
+			tracee->pid,
+			tracee->load_info->interp->user_path,
+			tracee->load_info->interp->host_path,
+			(unsigned long)ELF_FIELD(tracee->load_info->interp->elf_header, entry));
 
 		/* An ELF interpreter is supposed to be
 		 * standalone.  */
@@ -671,12 +731,23 @@ int translate_execve_enter(Tracee *tracee)
 
 	/* Execute the loader instead of the program.  */
 	loader_path = get_loader_path(tracee);
-	if (loader_path == NULL)
+	if (loader_path == NULL) {
+		note(tracee, ERROR, INTERNAL, "[LOADER_PATH_FAIL] pid=%d, get_loader_path failed (loader not found)", tracee->pid);
 		return -ENOENT;
+	}
 
-	status = set_sysarg_path(tracee, loader_path, SYSARG_1);
-	if (status < 0)
+	note(tracee, INFO, INTERNAL, "[LOADER_PATH_OK] pid=%d, loader_path='%s'", tracee->pid, loader_path);
+
+	status = set_sysarg_path(tracee, loader_path, path_reg);
+	if (status < 0) {
+		int saved_errno = -status;
+		note(tracee, ERROR, INTERNAL, "[SET_SYSARG_FAIL] pid=%d, set_sysarg_path('%s') failed: %s (errno=%d)",
+			tracee->pid, loader_path, strerror(saved_errno), saved_errno);
 		return status;
+	}
+
+	note(tracee, INFO, INTERNAL, "[EXECVE_DISPATCH_OK] pid=%d, substituted loader '%s' for guest execution",
+		tracee->pid, loader_path);
 
 	/* Mask to its ptracer syscalls performed by the loader.  */
 	tracee->as_ptracee.ignore_loader_syscalls = true;

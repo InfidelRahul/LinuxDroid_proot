@@ -385,6 +385,9 @@ static int transfer_load_script(Tracee *tracee)
 	save_current_regs(tracee, ORIGINAL);
 	tracee->_regs_were_changed = true;
 
+	note(tracee, INFO, INTERNAL, "[LOAD_SCRIPT_OK] pid=%d, load script transferred to stack (sp=0x%lx, size=%zu)",
+		tracee->pid, (unsigned long)(stack_pointer - buffer_size), buffer_size);
+
 	return 0;
 }
 
@@ -400,6 +403,11 @@ void translate_execve_exit(Tracee *tracee)
 	int status;
 
 	if (IS_NOTIFICATION_PTRACED_LOAD_DONE(tracee)) {
+		word_t new_sp = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		word_t new_pc = peek_reg(tracee, ORIGINAL, SYSARG_3);
+		note(tracee, INFO, INTERNAL, "[LOAD_DONE_EXIT] pid=%d, loader completed, transferring control to guest (sp=0x%lx, pc=0x%lx)",
+			tracee->pid, (unsigned long)new_sp, (unsigned long)new_pc);
+
 		/* Be sure not to confuse the ptracer with an
 		 * unexpected syscall/returned value.  */
 		poke_reg(tracee, SYSARG_RESULT, 0);
@@ -413,8 +421,8 @@ void translate_execve_exit(Tracee *tracee)
 		 * - the rtld_fini pointer
 		 * - the state flags
 		 */
-		poke_reg(tracee, STACK_POINTER, peek_reg(tracee, ORIGINAL, SYSARG_2));
-		poke_reg(tracee, INSTR_POINTER, peek_reg(tracee, ORIGINAL, SYSARG_3));
+		poke_reg(tracee, STACK_POINTER, new_sp);
+		poke_reg(tracee, INSTR_POINTER, new_pc);
 		poke_reg(tracee, RTLD_FINI, 0);
 		poke_reg(tracee, STATE_FLAGS, 0);
 
@@ -448,8 +456,14 @@ void translate_execve_exit(Tracee *tracee)
 	}
 
 	syscall_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-	if ((int) syscall_result < 0)
+	if ((int) syscall_result < 0) {
+		int saved_err = -(int)syscall_result;
+		note(tracee, ERROR, INTERNAL, "[EXECVE_KERNEL_FAIL] pid=%d, kernel execve failed with errno=%d: %s",
+			tracee->pid, saved_err, strerror(saved_err));
 		return;
+	}
+
+	note(tracee, INFO, INTERNAL, "[EXECVE_KERNEL_OK] pid=%d, kernel execve succeeded, transferring load script", tracee->pid);
 
 	/* Execve happened; commit the new "/proc/self/exe".  */
 	if (tracee->new_exe != NULL) {
@@ -472,8 +486,11 @@ void translate_execve_exit(Tracee *tracee)
 
 	/* Transfer the load script to the loader.  */
 	status = transfer_load_script(tracee);
-	if (status < 0)
-		note(tracee, ERROR, INTERNAL, "can't transfer load script: %s", strerror(-status));
+	if (status < 0) {
+		int saved_err = -status;
+		note(tracee, ERROR, INTERNAL, "[TRANSFER_LOAD_SCRIPT_FAIL] pid=%d, can't transfer load script: %s (errno=%d)",
+			tracee->pid, strerror(saved_err), saved_err);
+	}
 
 	return;
 }
