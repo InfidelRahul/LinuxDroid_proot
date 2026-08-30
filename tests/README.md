@@ -11,6 +11,7 @@ that runs the built engine (`build/host/proot`) against a guest program.
 | `process-signal/` | fork, clone, execve, wait, exit, SIGCHLD/SIGTERM/SIGINT/SIGSYS | 12 |
 | `pty/`        | stdin/stdout/stderr, resize, signals, interactive shell | 13 |
 | `loader/`     | static/dynamic ELF, interpreter, guest libs, missing lib, wrong arch | 10 |
+| `memory/`     | tracee memory boundary (read/write/string/peek/poke over process_vm + ptrace fallback), ARM64 tagged-address normalization | 8b |
 
 Run a suite:
 

@@ -14,12 +14,12 @@ address verbatim, the operation fails.
 
 ## Audit checklist
 
-- [ ] Identify where PRoot obtains guest addresses (register values, iovecs).
-- [ ] Identify every `process_vm_readv` / `process_vm_writev` call.
-- [ ] Identify every `PTRACE_PEEKDATA` / `PTRACE_POKEDATA` call.
-- [ ] Identify the address macro / helper used for guest memory access.
-- [ ] On ARM64, strip the top byte before every such call.
-- [ ] Keep a *single* `UNTAG_ADDRESS(addr)` helper so the policy lives in one
+- [x] Identify where PRoot obtains guest addresses (register values, iovecs).
+- [x] Identify every `process_vm_readv` / `process_vm_writev` call.
+- [x] Identify every `PTRACE_PEEKDATA` / `PTRACE_POKEDATA` call.
+- [x] Identify the address macro / helper used for guest memory access.
+- [x] On ARM64, strip the top byte before every such call.
+- [x] Keep a *single* `UNTAG_ADDRESS(addr)` helper so the policy lives in one
       place.
 
 ## Decision record
@@ -34,6 +34,93 @@ address verbatim, the operation fails.
 | Expected behavior | all ptrace/process_vm addresses are untagged before use |
 | Android requirement | Android kernel TBI; Android 16+ |
 | Test | `linuxdroid-selftest` memory/ptrace rows; tagged-address repro |
+
+## Implementation record (tracee address normalization)
+
+**2026 audit finding:** `UNTAG_ADDRESS()` existed in
+`native/android/untag.h` but was referenced nowhere in the engine.  The
+kernel-facing memory operations in `src/tracee/mem.c` received raw tracee
+addresses, which is exactly how a tagged pointer such as
+`0xb400007c4165ec40` reached `ptrace(PTRACE_PEEKDATA, ...)` and failed
+with `EINVAL`.
+
+### Where normalization occurs
+
+One boundary, no scattering:
+
+```
+PRoot callers (syscall/, execve/, path/, loader/, extension/, ptrace/)
+        │  word_t tracee address
+        ▼
+src/tracee/mem.h:  normalize_tracee_address()   ← the single boundary
+        │  implemented with native/android/untag.h: UNTAG_WORD()
+        ▼
+read_data / write_data / read_string / peek_word / poke_word / writev_data
+        │  kernel-safe address (fast path AND ptrace fallback share it)
+        ▼
+process_vm_readv / process_vm_writev / PTRACE_PEEKDATA / PTRACE_POKEDATA
+```
+
+The ptrace emulator (`src/ptrace/ptrace.c`) reuses the same helper for
+the guest's own `PTRACE_PEEK/POKE(TEXT|DATA)` requests, where the
+address argument is a ptracee memory address taken from `SYSARG_3`.
+
+### Coverage
+
+| Operation | Normalized? | Mechanism |
+|-----------|-------------|-----------|
+| `process_vm_readv`  | YES | `normalize_tracee_address()` at entry of `read_data` / `read_string` / `peek_word` |
+| `process_vm_writev` | YES | at entry of `write_data` / `writev_data` / `poke_word` |
+| `PTRACE_PEEKDATA`   | YES | same entries; every fallback loop uses the normalized base |
+| `PTRACE_POKEDATA`   | YES | same entries |
+| `read_data` / `write_data` / `read_string` / `peek_word` / `poke_word` | YES | the boundary itself |
+| ptrace-emulator `PEEK/POKE(TEXT,DATA)` | YES | `src/ptrace/ptrace.c` |
+| guest's own syscalls | NO (intentional) | executed by the tracee; kernel-side untagging policy is the tracee/kernel business, upstream behavior preserved |
+| `PTRACE_GET/SETREGS`, `GET/SETREGSET` | NO (not tracee addresses) | register buffers are host memory; `address` is `NT_*` (an integer) |
+| `PTRACE_PEEKUSER/POKEUSER` | NO (intentional) | USER-area byte offset, not a virtual address |
+| `PTRACE_SET_SYSCALL` | NO (intentional) | `address` is the syscall number |
+| `alloc_mem` / register values | NO (intentional) | stack pointer comes from and returns to the register file; upstream semantics |
+
+### What the mask does (and does not) do
+
+`UNTAG_WORD()`/`UNTAG_ADDRESS()` clear **bits 63:56 only**.  This is tag
+removal, not address canonicalization and not validity checking: bits
+55:0 (48-bit VA, 52-bit LVA/LPA2, 56-bit VA, PAC bits 54:50) pass through
+untouched, and an invalid address stays invalid.  The mask can never
+corrupt a live address: every aarch64 user-space mapping lives in the
+TTBR0 range whose top byte is always zero, so a non-zero top byte is
+always a tag (TBI/MTE/scudo/HWASan) or an already-invalid address.  On
+non-aarch64 builds the helpers are the identity — generic PRoot behavior
+is bit-for-bit unchanged.
+
+### How the tests reproduce the problem
+
+* `linuxdroid-selftest` rows `ptrace-untag` / `pvm-untag`: a raw
+  `0xb4`-tagged address is passed to `ptrace(PTRACE_PEEKDATA)` /
+  `process_vm_readv` (kernel rejects — the original `EINVAL` class),
+  then the same access at the top-byte-masked address succeeds and
+  returns the expected word.  `untag-unit` proves the helper never
+  alters a valid address and strips exactly the tag byte on aarch64.
+* `tests/memory/` runs a guest probe **under the engine** that passes a
+  `0xb4`-tagged path pointer to `openat(2)`: on aarch64 the engine must
+  normalize and the syscall must succeed; on other architectures
+  normalization is the identity and the invalid pointer must be
+  rejected (upstream behavior preserved).  The suite runs the probe
+  twice — once under the normal engine (process_vm fast path) and once
+  under a test-only engine variant built with `HAVE_PROCESS_VM` disabled
+  (pure `PTRACE_PEEK/POKEDATA` fallback).
+
+### How to run the regression
+
+```sh
+make proot            # host engine
+make selftest         # kernel-level tagged-address repro rows
+tests/memory/run.sh   # engine-level memory boundary (fast path + fallback)
+make test             # everything
+# device (Android ARM64, requires adb + NDK build):
+make NDK_ROOT=/path/to/ndk android-arm64
+tools/android-test/adb-test.sh arm64-v8a
+```
 
 ## Untagging policy
 

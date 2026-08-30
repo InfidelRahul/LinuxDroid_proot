@@ -50,6 +50,13 @@ TALLOC_CFLAGS  := -I$(TALLOC_SRC) -std=gnu99 -O2 \
                    -DTALLOC_BUILD_VERSION_MINOR=4 \
                    -DTALLOC_BUILD_VERSION_RELEASE=2
 
+# LinuxDroid Android compatibility boundary (untag.h & friends).  The
+# tracee-memory subsystem includes native/android/untag.h for ARM64
+# tracee-address normalization.  src/GNUmakefile adds the -I for it (so
+# in-tree `make -C src` builds work too); the per-target rules below copy
+# it into build/ (like lib/uthash) so out-of-tree builds resolve it.
+NATIVE_ANDROID := $(CURDIR)/native/android
+
 .PHONY: _talloc_host
 _talloc_host:
 	@mkdir -p $(BUILD_DIR)/talloc/host
@@ -131,6 +138,8 @@ $(HOST_GNUMAKE): | $(BUILD_DIR)/host
 	@cp -r src/. $(BUILD_DIR)/host/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/host:
 	@mkdir -p $(BUILD_DIR)/host
@@ -170,7 +179,11 @@ $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
 	@$(NDK_LLVM)/bin/$3$(ANDROID_API)-clang -O2 -Wall -Wextra -D_GNU_SOURCE $(ANDROID_PIE) \
 		-o $$(BUILD_DIR)/android/$2/linuxdroid-selftest \
 		tools/selftest/linuxdroid-selftest.c
-	@echo "  OK $1 -> $$(BUILD_DIR)/android/$2/{proot,loader,linuxdroid-selftest}"
+	@echo "  CC  guest-mem probe ($1)"
+	@$(NDK_LLVM)/bin/$3$(ANDROID_API)-clang -O2 -Wall -Wextra -D_GNU_SOURCE $(ANDROID_PIE) \
+		-o $$(BUILD_DIR)/android/$2/guest-mem \
+		tests/memory/guest-mem.c
+	@echo "  OK $1 -> $$(BUILD_DIR)/android/$2/{proot,loader,linuxdroid-selftest,guest-mem}"
 endef
 
 # talloc cross build for an ABI
@@ -193,6 +206,8 @@ $(BUILD_DIR)/arm64-v8a/GNUmakefile: | $(BUILD_DIR)/arm64-v8a
 	@cp -r src/. $(BUILD_DIR)/arm64-v8a/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/arm64-v8a:
 	@mkdir -p $(BUILD_DIR)/arm64-v8a
@@ -201,6 +216,8 @@ $(BUILD_DIR)/x86_64/GNUmakefile: | $(BUILD_DIR)/x86_64
 	@cp -r src/. $(BUILD_DIR)/x86_64/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/x86_64:
 	@mkdir -p $(BUILD_DIR)/x86_64
@@ -215,6 +232,7 @@ test: proot
 	@tests/process-signal/run.sh
 	@tests/pty/run.sh
 	@tests/loader/run.sh
+	@tests/memory/run.sh
 	@echo "  TEST all suites: PASS"
 
 # The upstream PRoot suite (test/) additionally requires building a busybox

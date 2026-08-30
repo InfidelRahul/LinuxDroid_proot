@@ -41,11 +41,13 @@
 
 static int failures = 0;
 static int skips = 0;
+static int checks = 0;
 
 static void report(const char *name, const char *status, const char *detail)
 {
 	printf("[%s] %-22s %s\n", status, name, detail ? detail : "");
 	fflush(stdout);
+	checks++;
 }
 
 static void pass(const char *name, const char *detail)
@@ -200,6 +202,179 @@ static void check_ptrace(void)
 		}
 	} else {
 		fail("ptrace", "tracee did not stop at SIGSTOP");
+	}
+}
+
+/* ---- 4b. ARM64 tagged addresses (normalization repro) ------------------- */
+
+/*
+ * Reproduce the original Android ARM64 failure class at the kernel level
+ * and prove the normalization mechanism used by the engine
+ * (native/android/untag.h):
+ *
+ *   ptrace(PTRACE_PEEKDATA, pid, 0xb400007c4165ec40, ...)  ->  EINVAL
+ *
+ * A pointer with a non-zero top byte (scudo/MTE/HWASan tag) is rejected
+ * by the kernel's ptrace/process_vm interfaces; the same access at the
+ * untagged (masked) address must succeed and return the right value.
+ * On x86_64 the tagged form is simply a non-canonical address: the raw
+ * probe still fails and the masked probe still succeeds, so the check is
+ * meaningful on every architecture.
+ */
+
+/* The actual normalization policy, included from the engine's Android
+ * compatibility boundary (single choke point). */
+#include "../../native/android/untag.h"
+
+/* Word-sized so ptrace/process_vm results compare exactly (PEEKDATA
+ * always returns a full word). */
+#define UNTAG_MAGIC 0x5a12c0deL
+
+static volatile long g_untag_magic = UNTAG_MAGIC;
+
+static void check_untag_unit(void)
+{
+	/* The normalization helper itself: must never alter a valid
+	 * address, and must strip exactly the top byte on aarch64. */
+	uintptr_t addr = (uintptr_t)&g_untag_magic;
+	uintptr_t norm = UNTAG_WORD(addr);
+
+	if (norm != addr) {
+		fail("untag-unit", "normalization altered a valid address");
+		return;
+	}
+#if defined(__aarch64__)
+	if (UNTAG_WORD(addr | 0xb400000000000000ULL) != addr) {
+		fail("untag-unit", "top byte not stripped on aarch64");
+		return;
+	}
+	pass("untag-unit", "identity on valid, strips 0xb4 tag (aarch64)");
+#else
+	pass("untag-unit", "identity on valid addresses (non-aarch64)");
+#endif
+}
+
+static void untag_child(void)
+{
+	if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0)
+		_exit(2);
+	raise(SIGSTOP);
+	_exit(0);
+}
+
+/* The address form the engine computes on aarch64 before handing a
+ * tracee address to ptrace/process_vm: top byte cleared.  Written out
+ * explicitly here (not via UNTAG_ADDRESS) because on non-aarch64 the
+ * engine's normalization is the identity by design -- this check then
+ * demonstrates the mechanism: kernel rejects the tagged form, accepts
+ * the masked form.  untag-unit above proves UNTAG_WORD implements
+ * exactly this mask on aarch64. */
+#define UNTAGGED(addr) ((void *)((uintptr_t)(addr) & 0x00ffffffffffffffULL))
+
+static void check_ptrace_untag(void)
+{
+	pid_t pid = fork();
+	if (pid < 0) {
+		skip("ptrace-untag", "fork failed");
+		return;
+	}
+	if (pid == 0)
+		untag_child();
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+	if (!WIFSTOPPED(status)) {
+		fail("ptrace-untag", "tracee did not stop");
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return;
+	}
+
+	uintptr_t addr = (uintptr_t)&g_untag_magic;
+	uintptr_t tagged = addr | 0xb400000000000000ULL;
+
+	errno = 0;
+	long raw = ptrace(PTRACE_PEEKDATA, pid, (void *)tagged, 0);
+	int raw_errno = errno;
+
+	errno = 0;
+	long masked = ptrace(PTRACE_PEEKDATA, pid,
+			     UNTAGGED(tagged), 0);
+
+	ptrace(PTRACE_CONT, pid, 0, 0);
+	waitpid(pid, &status, 0);
+
+	/* The masked access is the hard requirement: it is what the
+	 * engine does after normalization. */
+	if (masked == (long)UNTAG_MAGIC) {
+		char detail[160];
+		if (raw == -1 && raw_errno != 0)
+			snprintf(detail, sizeof(detail),
+				 "tagged PEEKDATA rejected (%s), untagged PEEKDATA OK",
+				 raw_errno == EINVAL ? "EINVAL" : strerror(raw_errno));
+		else
+			snprintf(detail, sizeof(detail),
+				 "kernel accepts tagged PEEKDATA, untagged PEEKDATA OK");
+		pass("ptrace-untag", detail);
+	} else {
+		fail("ptrace-untag", "untagged PEEKDATA failed");
+	}
+}
+
+static void check_process_vm_untag(void)
+{
+	pid_t pid = fork();
+	if (pid < 0) {
+		skip("pvm-untag", "fork failed");
+		return;
+	}
+	if (pid == 0) {
+		/* Stay alive while the parent probes our memory. */
+		while (g_untag_magic == UNTAG_MAGIC)
+			;
+		_exit(0);
+	}
+
+	usleep(100 * 1000);
+
+	struct iovec local;
+	struct iovec remote;
+	long buf = 0;
+
+	uintptr_t addr = (uintptr_t)&g_untag_magic;
+	uintptr_t tagged = addr | 0xb400000000000000ULL;
+
+	local.iov_base = &buf;
+	local.iov_len = sizeof(buf);
+	remote.iov_base = (void *)tagged;
+	remote.iov_len = sizeof(buf);
+	ssize_t raw = syscall(SYS_process_vm_readv, pid, &local, 1,
+			      &remote, 1, 0);
+	int raw_errno = errno;
+
+	remote.iov_base = UNTAGGED(tagged);
+	buf = 0;
+	ssize_t masked = syscall(SYS_process_vm_readv, pid, &local, 1,
+				 &remote, 1, 0);
+
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+
+	if (masked == (ssize_t)sizeof(buf) && buf == UNTAG_MAGIC) {
+		char detail[160];
+		if (raw != (ssize_t)sizeof(buf))
+			snprintf(detail, sizeof(detail),
+				 "tagged readv rejected (%s), untagged readv OK",
+				 raw_errno == EINVAL ? "EINVAL" : strerror(raw_errno));
+		else
+			snprintf(detail, sizeof(detail),
+				 "kernel accepts tagged readv, untagged readv OK");
+		pass("pvm-untag", detail);
+	} else if (raw != (ssize_t)sizeof(buf) &&
+		   (raw_errno == ENOSYS || raw_errno == EPERM)) {
+		skip("pvm-untag", "process_vm_readv unavailable");
+	} else {
+		fail("pvm-untag", "untagged readv failed");
 	}
 }
 
@@ -372,6 +547,9 @@ int main(int argc, char **argv)
 	check_architecture();
 	check_process_vm();
 	check_ptrace();
+	check_untag_unit();
+	check_ptrace_untag();
+	check_process_vm_untag();
 	check_syscall();
 	check_seccomp();
 	check_execve();
@@ -381,7 +559,7 @@ int main(int argc, char **argv)
 
 	printf("--------------------------------------------\n");
 	printf("result: %s\n", failures == 0 ? "PASS" : "FAIL");
-	printf("summary: %d pass, %d fail, %d skip\n", (10 - failures - skips),
-	       failures, skips);
+	printf("summary: %d pass, %d fail, %d skip\n",
+	       checks - failures - skips, failures, skips);
 	return failures == 0 ? 0 : 1;
 }
