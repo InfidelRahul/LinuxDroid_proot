@@ -50,6 +50,12 @@ TALLOC_CFLAGS  := -I$(TALLOC_SRC) -std=gnu99 -O2 \
                    -DTALLOC_BUILD_VERSION_MINOR=4 \
                    -DTALLOC_BUILD_VERSION_RELEASE=2
 
+# LinuxDroid Android compatibility boundary (untag.h & friends).  The
+# tracee-memory subsystem includes native/android/untag.h for ARM64
+# tracee-address normalization; every build (host included) needs it on
+# the include path.  On non-aarch64 the helpers compile to the identity.
+NATIVE_ANDROID := $(CURDIR)/native/android
+
 .PHONY: _talloc_host
 _talloc_host:
 	@mkdir -p $(BUILD_DIR)/talloc/host
@@ -121,7 +127,7 @@ $(BUILD_DIR)/host/proot: _talloc_host $(HOST_GNUMAKE)
 	@echo "  BUILD host proot"
 	@$(MAKE) -C $(BUILD_DIR)/host -f GNUmakefile \
 		CC=$(HOST_CC) STRIP=$(HOST_STRIP) OBJCOPY=$(HOST_OBJCOPY) OBJDUMP=$(HOST_OBJDUMP) \
-		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC)" \
+		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) -I$(NATIVE_ANDROID)" \
 		LDFLAGS="-Wl,-z,noexecstack $(CURDIR)/$(BUILD_DIR)/talloc/host/libtalloc.a" \
 		-j$(shell nproc) proot
 	@cp $(BUILD_DIR)/host/proot $(BUILD_DIR)/host/proot.host 2>/dev/null || true
@@ -160,7 +166,7 @@ $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
 		STRIP=$(NDK_LLVM)/bin/llvm-strip \
 		OBJCOPY=$(NDK_LLVM)/bin/llvm-objcopy \
 		OBJDUMP=$(NDK_LLVM)/bin/llvm-objdump \
-		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) $(ANDROID_PIE) -fPIC" \
+		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) -I$(NATIVE_ANDROID) $(ANDROID_PIE) -fPIC" \
 		LDFLAGS="-Wl,-z,noexecstack -pie $$(CURDIR)/$$(BUILD_DIR)/talloc/$2/libtalloc.a" \
 		-j$$(shell nproc) proot
 	@mkdir -p $$(BUILD_DIR)/android/$2
@@ -170,7 +176,11 @@ $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
 	@$(NDK_LLVM)/bin/$3$(ANDROID_API)-clang -O2 -Wall -Wextra -D_GNU_SOURCE $(ANDROID_PIE) \
 		-o $$(BUILD_DIR)/android/$2/linuxdroid-selftest \
 		tools/selftest/linuxdroid-selftest.c
-	@echo "  OK $1 -> $$(BUILD_DIR)/android/$2/{proot,loader,linuxdroid-selftest}"
+	@echo "  CC  guest-mem probe ($1)"
+	@$(NDK_LLVM)/bin/$3$(ANDROID_API)-clang -O2 -Wall -Wextra -D_GNU_SOURCE $(ANDROID_PIE) \
+		-o $$(BUILD_DIR)/android/$2/guest-mem \
+		tests/memory/guest-mem.c
+	@echo "  OK $1 -> $$(BUILD_DIR)/android/$2/{proot,loader,linuxdroid-selftest,guest-mem}"
 endef
 
 # talloc cross build for an ABI
@@ -215,6 +225,7 @@ test: proot
 	@tests/process-signal/run.sh
 	@tests/pty/run.sh
 	@tests/loader/run.sh
+	@tests/memory/run.sh
 	@echo "  TEST all suites: PASS"
 
 # The upstream PRoot suite (test/) additionally requires building a busybox

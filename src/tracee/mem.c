@@ -83,7 +83,9 @@ static inline void store_word(void *address, word_t value)
 int write_data(const Tracee *tracee, word_t dest_tracee, const void *src_tracer, word_t size)
 {
 	word_t *src  = (word_t *)src_tracer;
-	word_t *dest = (word_t *)dest_tracee;
+	/* Kernel-safe (untagged) destination: used by both the
+	 * process_vm_writev fast path and the ptrace fallback below.  */
+	word_t *dest = (word_t *)normalize_tracee_address(dest_tracee);
 
 	long   status;
 	word_t word, i, j;
@@ -161,6 +163,11 @@ int writev_data(const Tracee *tracee, word_t dest_tracee, const struct iovec *sr
 	int status;
 	int i;
 
+	/* Kernel-safe (untagged) destination for the process_vm_writev
+	 * path; the iterative write_data() fallback normalizes again
+	 * (idempotent).  */
+	dest_tracee = normalize_tracee_address(dest_tracee);
+
 #if defined(HAVE_PROCESS_VM)
 	struct iovec remote;
 
@@ -196,7 +203,9 @@ int writev_data(const Tracee *tracee, word_t dest_tracee, const struct iovec *sr
  */
 int read_data(const Tracee *tracee, void *dest_tracer, word_t src_tracee, word_t size)
 {
-	word_t *src  = (word_t *)src_tracee;
+	/* Kernel-safe (untagged) source: used by both the
+	 * process_vm_readv fast path and the ptrace fallback below.  */
+	word_t *src  = (word_t *)normalize_tracee_address(src_tracee);
 	word_t *dest = (word_t *)dest_tracer;
 
 	word_t nb_trailing_bytes;
@@ -267,6 +276,11 @@ int read_data(const Tracee *tracee, void *dest_tracer, word_t src_tracee, word_t
  */
 int read_string(const Tracee *tracee, char *dest_tracer, word_t src_tracee, word_t max_size)
 {
+	/* Kernel-safe (untagged) source: normalize once here so the
+	 * process_vm chunk arithmetic, the ptrace fallback, and the
+	 * word-derived pointers all operate on the same address.  */
+	src_tracee = normalize_tracee_address(src_tracee);
+
 	word_t *src  = (word_t *)src_tracee;
 	word_t *dest = (word_t *)dest_tracer;
 
@@ -397,6 +411,9 @@ word_t peek_word(const Tracee *tracee, word_t address)
 {
 	word_t result = 0;
 
+	/* Kernel-safe (untagged) address for both access paths.  */
+	address = normalize_tracee_address(address);
+
 #if defined(HAVE_PROCESS_VM)
 	int status;
 	struct iovec local;
@@ -439,6 +456,9 @@ word_t peek_word(const Tracee *tracee, word_t address)
 void poke_word(const Tracee *tracee, word_t address, word_t value)
 {
 	word_t tmp;
+
+	/* Kernel-safe (untagged) address for both access paths.  */
+	address = normalize_tracee_address(address);
 
 #if defined(HAVE_PROCESS_VM)
 	int status;

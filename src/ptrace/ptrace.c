@@ -289,6 +289,12 @@ int translate_ptrace_exit(Tracee *tracee)
 		/* Fall through.  */
 	case PTRACE_PEEKTEXT:
 	case PTRACE_PEEKDATA:
+		/* @address is a memory address of the ptracee: normalize
+		 * it (ARM64 TBI tag) before handing it to the kernel.
+		 * The PEEKUSER fall-through is unaffected: its "address"
+		 * is a USER-area offset, far below bit 56.  */
+		address = normalize_tracee_address(address);
+
 		errno = 0;
 		result = (word_t) ptrace(request, pid, address, NULL);
 		if (errno != 0)
@@ -315,6 +321,11 @@ int translate_ptrace_exit(Tracee *tracee)
 
 	case PTRACE_POKETEXT:
 	case PTRACE_POKEDATA:
+		/* @address is a memory address of the ptracee: normalize
+		 * it (ARM64 TBI tag) once for the 32-on-64 read-modify-
+		 * write and the actual poke below.  */
+		address = normalize_tracee_address(address);
+
 		if (is_32on64_mode(ptracer)) {
 			word_t tmp;
 
