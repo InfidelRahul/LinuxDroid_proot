@@ -1,0 +1,58 @@
+name: Release
+
+# Assemble and publish LinuxDroid-PRoot release artifacts (Phase 14).
+#
+# Triggered by a tag like `v0.1.0`.  Cross-compiles proot + loader for
+# arm64-v8a and x86_64, builds a MANIFEST.txt for each ABI, and attaches them
+# to the GitHub release.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Install NDK (pinned)
+        run: |
+          set -euxo pipefail
+          curl -sSL -o /tmp/ndk.zip \
+            https://dl.google.com/android/repository/android-ndk-r27b-linux.zip
+          unzip -q /tmp/ndk.zip -d /opt
+          echo "NDK_ROOT=/opt/android-ndk-r27b" >> "$GITHUB_ENV"
+      - name: Cross-compile arm64-v8a
+        run: make NDK_ROOT="$NDK_ROOT" android-arm64
+      - name: Cross-compile x86_64
+        run: make NDK_ROOT="$NDK_ROOT" android-x86_64
+      - name: Build release tree + manifests
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          for abi in arm64-v8a x86_64; do
+            mkdir -p "dist/$abi"
+            cp "build/android/$abi/proot" "dist/$abi/proot"
+            cp "build/android/$abi/loader" "dist/$abi/loader" 2>/dev/null || true
+            printf 'LinuxDroid-PRoot %s\ncommit: %s\nABI: %s\n' \
+              "${GITHUB_REF_NAME}" "$(git rev-parse --short HEAD)" "$abi" \
+              > "dist/$abi/MANIFEST.txt"
+            printf 'sha256 proot:   %s\nsha256 loader:  %s\n' \
+              "$(sha256sum "dist/$abi/proot" | cut -d' ' -f1)" \
+              "$(sha256sum "dist/$abi/loader" | cut -d' ' -f1)" \
+              >> "dist/$abi/MANIFEST.txt"
+            echo "android: 16+" >> "dist/$abi/MANIFEST.txt"
+          done
+      - name: Archive
+        run: |
+          cd dist
+          tar czf ../LinuxDroid-PRoot-${GITHUB_REF_NAME}.tar.gz .
+          cd ..
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LinuxDroid-PRoot-${{ github.ref_name }}.tar.gz
+          generate_release_notes: true
