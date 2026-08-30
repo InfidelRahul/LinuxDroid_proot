@@ -52,8 +52,9 @@ TALLOC_CFLAGS  := -I$(TALLOC_SRC) -std=gnu99 -O2 \
 
 # LinuxDroid Android compatibility boundary (untag.h & friends).  The
 # tracee-memory subsystem includes native/android/untag.h for ARM64
-# tracee-address normalization; every build (host included) needs it on
-# the include path.  On non-aarch64 the helpers compile to the identity.
+# tracee-address normalization.  src/GNUmakefile adds the -I for it (so
+# in-tree `make -C src` builds work too); the per-target rules below copy
+# it into build/ (like lib/uthash) so out-of-tree builds resolve it.
 NATIVE_ANDROID := $(CURDIR)/native/android
 
 .PHONY: _talloc_host
@@ -127,7 +128,7 @@ $(BUILD_DIR)/host/proot: _talloc_host $(HOST_GNUMAKE)
 	@echo "  BUILD host proot"
 	@$(MAKE) -C $(BUILD_DIR)/host -f GNUmakefile \
 		CC=$(HOST_CC) STRIP=$(HOST_STRIP) OBJCOPY=$(HOST_OBJCOPY) OBJDUMP=$(HOST_OBJDUMP) \
-		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) -I$(NATIVE_ANDROID)" \
+		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC)" \
 		LDFLAGS="-Wl,-z,noexecstack $(CURDIR)/$(BUILD_DIR)/talloc/host/libtalloc.a" \
 		-j$(shell nproc) proot
 	@cp $(BUILD_DIR)/host/proot $(BUILD_DIR)/host/proot.host 2>/dev/null || true
@@ -137,6 +138,8 @@ $(HOST_GNUMAKE): | $(BUILD_DIR)/host
 	@cp -r src/. $(BUILD_DIR)/host/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/host:
 	@mkdir -p $(BUILD_DIR)/host
@@ -166,7 +169,7 @@ $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
 		STRIP=$(NDK_LLVM)/bin/llvm-strip \
 		OBJCOPY=$(NDK_LLVM)/bin/llvm-objcopy \
 		OBJDUMP=$(NDK_LLVM)/bin/llvm-objdump \
-		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) -I$(NATIVE_ANDROID) $(ANDROID_PIE) -fPIC" \
+		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) $(ANDROID_PIE) -fPIC" \
 		LDFLAGS="-Wl,-z,noexecstack -pie $$(CURDIR)/$$(BUILD_DIR)/talloc/$2/libtalloc.a" \
 		-j$$(shell nproc) proot
 	@mkdir -p $$(BUILD_DIR)/android/$2
@@ -203,6 +206,8 @@ $(BUILD_DIR)/arm64-v8a/GNUmakefile: | $(BUILD_DIR)/arm64-v8a
 	@cp -r src/. $(BUILD_DIR)/arm64-v8a/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/arm64-v8a:
 	@mkdir -p $(BUILD_DIR)/arm64-v8a
@@ -211,6 +216,8 @@ $(BUILD_DIR)/x86_64/GNUmakefile: | $(BUILD_DIR)/x86_64
 	@cp -r src/. $(BUILD_DIR)/x86_64/
 	@mkdir -p $(BUILD_DIR)/lib
 	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
+	@mkdir -p $(BUILD_DIR)/native
+	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
 
 $(BUILD_DIR)/x86_64:
 	@mkdir -p $(BUILD_DIR)/x86_64
