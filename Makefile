@@ -19,12 +19,18 @@
 #   make selftest            build the self-test diagnostic (host)
 #   make android-arm64       cross-compile for aarch64-linux-android (NDK)
 #   make android-x86_64      cross-compile for x86_64-linux-android (NDK)
+#   make android-release     assemble deterministic Android release artifacts
 #   make test                run upstream functional tests on the host
-#   make release             assemble the release artifact tree
+#   make release             assemble the host release artifact tree
 #   make clean               remove all build outputs
 # ---------------------------------------------------------------------------
 
 SHELL := /bin/bash
+
+# Single authoritative PRoot artifact version. LinuxDroid uses this exact
+# semantic version in its runtime compatibility gate; do not introduce a second
+# version identity here.
+PROOT_VERSION ?= 0.1.0
 
 # Where everything under our control is written.  Never put build output
 # inside src/ - that tree is a faithful copy of upstream PRoot.
@@ -101,7 +107,7 @@ endef
 # ---------------------------------------------------------------------------
 # Per-target convenience targets
 # ---------------------------------------------------------------------------
-.PHONY: all proot loader selftest android-arm64 android-x86_64 test release clean
+.PHONY: all proot loader selftest android-arm64 android-x86_64 android-release test release clean
 
 all: proot
 
@@ -240,24 +246,79 @@ test: proot
 #   make -C test check
 
 # ---------------------------------------------------------------------------
-# Release artifact assembly (Phase 14)
+# Release artifact assembly
+#
+# The manifest is the machine-readable contract consumed by LinuxDroid's
+# RuntimeAssetsManager. It is intentionally keyed so a parser can read it
+# without depending on prose. Version is the single authoritative
+# $(PROOT_VERSION); commit is the exact source tree used for the build.
 # ---------------------------------------------------------------------------
+define write_manifest
+	@printf '%s\n' \
+		"LinuxDroid-PRoot v$(PROOT_VERSION)" \
+		"commit:  $(shell git rev-parse --short HEAD 2>/dev/null)" \
+		"ABI:     $2" \
+		"arch:    $3" \
+		"cc:      $4" \
+		"ndk:     $5" \
+		"android: 16+ (API 36)" \
+		"sha256:" \
+		"  proot:    $$(sha256sum $6 2>/dev/null | cut -d' ' -f1)" \
+		"  loader:   $$(sha256sum $7 2>/dev/null | cut -d' ' -f1)" \
+		"built:   $$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		> $1
+endef
+
 release: proot loader
 	@mkdir -p $(BUILD_DIR)/release
-	@printf '%s\n' \
-		"LinuxDroid-PRoot $(shell git describe --tags 2>/dev/null || echo dev)" \
-		"commit: $(shell git rev-parse --short HEAD 2>/dev/null)" \
-		"arch:   host ($(shell uname -m))" \
-		"cc:     $(HOST_CC)" \
-		"built:  $(shell date -u +%Y-%m-%dT%H:%M:%SZ)" \
-		"sha256:" \
-		"  proot:   $(shell sha256sum $(BUILD_DIR)/host/proot 2>/dev/null | cut -d' ' -f1)" \
-		"  loader:  $(shell sha256sum $(BUILD_DIR)/host/loader.bin 2>/dev/null | cut -d' ' -f1)" \
-		"min-android: 16+" \
-		> $(BUILD_DIR)/release/MANIFEST.txt
 	@cp $(BUILD_DIR)/host/proot $(BUILD_DIR)/release/proot
 	@cp $(BUILD_DIR)/host/loader.bin $(BUILD_DIR)/release/loader 2>/dev/null || true
-	@echo "  OK release -> $(BUILD_DIR)/release"
+	@$(call write_manifest, \
+		$(BUILD_DIR)/release/MANIFEST.txt, \
+		host, \
+		$(shell uname -m), \
+		$(HOST_CC), \
+		host, \
+		$(BUILD_DIR)/release/proot, \
+		$(BUILD_DIR)/release/loader)
+	@echo "  OK host release -> $(BUILD_DIR)/release"
+
+# ---------------------------------------------------------------------------
+# Deterministic Android release artifact tree
+#
+#   $(BUILD_DIR)/android-release/
+#     arm64-v8a/  proot, loader, MANIFEST.txt
+#     x86_64/     proot, loader, MANIFEST.txt
+#
+# This is the exact tree consumed by LinuxDroid's RuntimeAssetsManager.
+# ---------------------------------------------------------------------------
+.PHONY: android-release
+android-release: android-arm64 android-x86_64
+	@set -e; \
+	for abi in arm64-v8a x86_64; do \
+		mkdir -p "$(BUILD_DIR)/android-release/$$abi"; \
+		cp "$(BUILD_DIR)/android/$$abi/proot" "$(BUILD_DIR)/android-release/$$abi/proot"; \
+		test -f "$(BUILD_DIR)/android/$$abi/loader" || { \
+			echo "Error: $(BUILD_DIR)/android/$$abi/loader is missing"; exit 1; }; \
+		cp "$(BUILD_DIR)/android/$$abi/loader" "$(BUILD_DIR)/android-release/$$abi/loader"; \
+	done
+	@$(call write_manifest, \
+		$(BUILD_DIR)/android-release/arm64-v8a/MANIFEST.txt, \
+		arm64-v8a, \
+		aarch64, \
+		$(NDK_LLVM)/bin/aarch64-linux-android$(ANDROID_API)-clang, \
+		$(NDK_ROOT), \
+		$(BUILD_DIR)/android-release/arm64-v8a/proot, \
+		$(BUILD_DIR)/android-release/arm64-v8a/loader)
+	@$(call write_manifest, \
+		$(BUILD_DIR)/android-release/x86_64/MANIFEST.txt, \
+		x86_64, \
+		x86_64, \
+		$(NDK_LLVM)/bin/x86_64-linux-android$(ANDROID_API)-clang, \
+		$(NDK_ROOT), \
+		$(BUILD_DIR)/android-release/x86_64/proot, \
+		$(BUILD_DIR)/android-release/x86_64/loader)
+	@echo "  OK android release -> $(BUILD_DIR)/android-release"
 
 # ---------------------------------------------------------------------------
 # Cleanup
