@@ -434,10 +434,21 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys UNUSED
 	case PR_setgroups:
 	case PR_setgroups32:
 	case PR_capset:
-	case PR_capget:
 	case PR_setdomainname:
 	case PR_sethostname:
 	case PR_chroot:
+		return 0;
+
+	case PR_capget: {
+		word_t datap = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		if (datap != 0) {
+			uint32_t caps[6] = { 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU, 0xffffffffU };
+			(void) write_data(tracee, datap, caps, sizeof(caps));
+		}
+		return 0;
+	}
+
+	case PR_prctl:
 		return 0;
 
 	case PR_getgroups:
@@ -453,11 +464,12 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys UNUSED
 		}
 	}
 
+	case PR_faccessat:
 	case PR_faccessat2: {
 		int dirfd = (int)peek_reg(tracee, ORIGINAL, SYSARG_1);
 		word_t path_addr = peek_reg(tracee, ORIGINAL, SYSARG_2);
 		int mode = (int)peek_reg(tracee, ORIGINAL, SYSARG_3);
-		int flags = (int)peek_reg(tracee, ORIGINAL, SYSARG_4);
+		int flags = (sysnum == PR_faccessat2) ? (int)peek_reg(tracee, ORIGINAL, SYSARG_4) : 0;
 		char path[PATH_MAX];
 		char host_path[PATH_MAX];
 		int status;
@@ -480,6 +492,9 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys UNUSED
 			status = fstatat(AT_FDCWD, host_path, &st, AT_SYMLINK_NOFOLLOW);
 		} else {
 			status = faccessat(AT_FDCWD, host_path, mode, flags);
+			if (status < 0 && errno == EINVAL) {
+				status = faccessat(AT_FDCWD, host_path, mode, 0);
+			}
 		}
 		if (status < 0)
 			return (word_t)-errno;
