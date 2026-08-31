@@ -466,27 +466,28 @@ void translate_syscall_exit(Tracee *tracee)
 
 	case PR_faccessat2: {
 		if ((int) syscall_result == -ENOSYS) {
-			int dirfd = (int) peek_reg(tracee, ORIGINAL, SYSARG_1);
-			char path[PATH_MAX];
+			char host_path[PATH_MAX];
 			int mode = (int) peek_reg(tracee, ORIGINAL, SYSARG_3);
 			int flags = (int) peek_reg(tracee, ORIGINAL, SYSARG_4);
-			status = get_sysarg_path(tracee, path, SYSARG_2);
+			word_t host_addr = peek_reg(tracee, CURRENT, SYSARG_2);
+
+			status = read_path(tracee, host_path, host_addr);
 			if (status >= 0) {
-				char host_path[PATH_MAX];
-				status = translate_path(tracee, host_path, dirfd, path, true);
-				if (status >= 0) {
-					int res;
-					if (flags == 0) {
+				int res;
+				if (flags == 0) {
+					res = faccessat(AT_FDCWD, host_path, mode, 0);
+				} else if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
+					struct stat st;
+					res = fstatat(AT_FDCWD, host_path, &st, AT_SYMLINK_NOFOLLOW);
+				} else {
+					res = faccessat(AT_FDCWD, host_path, mode, flags);
+					if (res < 0 && errno == EINVAL) {
+						/* Fallback if host kernel / libc rejects non-zero flags in faccessat */
 						res = faccessat(AT_FDCWD, host_path, mode, 0);
-					} else if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
-						struct stat st;
-						res = fstatat(AT_FDCWD, host_path, &st, AT_SYMLINK_NOFOLLOW);
-					} else {
-						res = faccessat(AT_FDCWD, host_path, mode, flags);
 					}
-					status = (res < 0) ? -errno : 0;
-					break;
 				}
+				status = (res < 0) ? -errno : 0;
+				break;
 			}
 		}
 		goto end;
