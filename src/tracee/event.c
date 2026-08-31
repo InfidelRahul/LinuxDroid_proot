@@ -95,8 +95,13 @@ int launch_process(Tracee *tracee, char *const argv[])
 
 		/* Improve performance by using seccomp mode 2, unless
 		 * this support is explicitly disabled.  */
-		if (getenv("PROOT_NO_SECCOMP") == NULL)
-			(void) enable_syscall_filtering(tracee);
+		if (getenv("PROOT_NO_SECCOMP") == NULL) {
+			int seccomp_status = enable_syscall_filtering(tracee);
+			if (seccomp_status < 0) {
+				note(tracee, WARNING, INTERNAL, "enable_syscall_filtering failed: %s (errno=%d)",
+					strerror(-seccomp_status), -seccomp_status);
+			}
+		}
 
 #if defined(__ANDROID__) && defined(__aarch64__)
 # ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
@@ -735,6 +740,31 @@ static int handle_tracee_event_kernel_4_8(Tracee *tracee, int tracee_status)
 			/* For each tracee, the first SIGSTOP
 			 * is only used to notify the tracer.  */
 			if (tracee->sigstop == SIGSTOP_IGNORED) {
+				const unsigned long default_ptrace_options = (
+					PTRACE_O_TRACESYSGOOD	|
+					PTRACE_O_TRACEFORK	|
+					PTRACE_O_TRACEVFORK	|
+					PTRACE_O_TRACEVFORKDONE	|
+					PTRACE_O_TRACEEXEC	|
+					PTRACE_O_TRACECLONE	|
+					PTRACE_O_TRACEEXIT);
+
+				/* Configure ptrace options and enable seccomp tracing on initial child synchronization */
+				status = ptrace(PTRACE_SETOPTIONS, tracee->pid, NULL,
+						default_ptrace_options | PTRACE_O_TRACESECCOMP);
+				if (status < 0) {
+					seccomp_enabled = false;
+					status = ptrace(PTRACE_SETOPTIONS, tracee->pid, NULL,
+							default_ptrace_options);
+					if (status < 0) {
+						note(tracee, ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
+					}
+				}
+				else {
+					if (getenv("PROOT_NO_SECCOMP") == NULL)
+						seccomp_enabled = true;
+				}
+
 				tracee->sigstop = SIGSTOP_ALLOWED;
 				signal = 0;
 			}
@@ -1003,6 +1033,26 @@ int handle_tracee_event(Tracee *tracee, int tracee_status)
 			/* For each tracee, the first SIGSTOP
 			 * is only used to notify the tracer.  */
 			if (tracee->sigstop == SIGSTOP_IGNORED) {
+				const unsigned long default_ptrace_options = (
+					PTRACE_O_TRACESYSGOOD	|
+					PTRACE_O_TRACEFORK	|
+					PTRACE_O_TRACEVFORK	|
+					PTRACE_O_TRACEVFORKDONE	|
+					PTRACE_O_TRACEEXEC	|
+					PTRACE_O_TRACECLONE	|
+					PTRACE_O_TRACEEXIT);
+
+				/* Configure ptrace options and enable seccomp tracing on initial child synchronization */
+				status = ptrace(PTRACE_SETOPTIONS, tracee->pid, NULL,
+						default_ptrace_options | PTRACE_O_TRACESECCOMP);
+				if (status < 0) {
+					status = ptrace(PTRACE_SETOPTIONS, tracee->pid, NULL,
+							default_ptrace_options);
+					if (status < 0) {
+						note(tracee, ERROR, SYSTEM, "ptrace(PTRACE_SETOPTIONS)");
+					}
+				}
+
 				tracee->sigstop = SIGSTOP_ALLOWED;
 				signal = 0;
 			}

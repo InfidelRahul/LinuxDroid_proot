@@ -40,7 +40,7 @@ cat > "$tmp/hello.c" <<'EOF'
 int main(void){ puts("loader-ok"); return 0; }
 EOF
 cc -o "$tmp/hello" "$tmp/hello.c" 2>/dev/null && {
-	if "$PROOT" -R "$ROOTFS" -b "$tmp:/lxtest" /lxtest/hello 2>/dev/null | grep -q loader-ok; then
+	if "$PROOT" -R "$ROOTFS" -b "$tmp" "$tmp/hello" 2>/dev/null | grep -q loader-ok; then
 		pass "dynamically-linked guest binary"
 	else
 		fail "dynamically-linked guest binary"

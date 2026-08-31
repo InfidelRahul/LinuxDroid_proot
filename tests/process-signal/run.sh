@@ -28,7 +28,7 @@ echo "== Phase 12 process/signal tests =="
 "$PROBE_DIR/probe" >/dev/null 2>&1 && pass "baseline (no proot)" || fail "baseline (no proot)"
 
 # through proot
-if "$PROOT" -R "$ROOTFS" -b "$PROBE_DIR:/probe" /probe/probe >/dev/null 2>&1; then
+if "$PROOT" -R "$ROOTFS" -b "$PROBE_DIR" "$PROBE_DIR/probe" >/dev/null 2>&1; then
 	pass "fork/exec/wait/signals via proot"
 else
 	fail "fork/exec/wait/signals via proot"
