@@ -77,7 +77,7 @@ _talloc_host:
 # ANDROID_NDK_ROOT in the environment.  The CI workflow downloads a pinned
 # NDK (see .github/workflows/ci.yml).
 # ---------------------------------------------------------------------------
-ANDROID_API  ?= 21
+ANDROID_API  ?= 28
 NDK_ROOT     ?= $(ANDROID_NDK_ROOT)
 NDK_HOST_TAG ?= linux-x86_64
 NDK_LLVM     := $(NDK_ROOT)/toolchains/llvm/prebuilt/$(NDK_HOST_TAG)
@@ -175,7 +175,7 @@ $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
 		STRIP=$(NDK_LLVM)/bin/llvm-strip \
 		OBJCOPY=$(NDK_LLVM)/bin/llvm-objcopy \
 		OBJDUMP=$(NDK_LLVM)/bin/llvm-objdump \
-		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) $(ANDROID_PIE) -fPIC" \
+		CFLAGS="-g -O2 -Wall -Wextra -I$(TALLOC_SRC) $(ANDROID_PIE) -fPIC -DHAVE_PROCESS_VM -DHAVE_SECCOMP_FILTER" \
 		LDFLAGS="-Wl,-z,noexecstack -pie $$(CURDIR)/$$(BUILD_DIR)/talloc/$2/libtalloc.a" \
 		-j$$(shell nproc) proot
 	@mkdir -p $$(BUILD_DIR)/android/$2

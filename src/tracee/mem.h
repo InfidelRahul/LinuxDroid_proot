@@ -27,10 +27,45 @@
 #include <sys/types.h> /* pid_t, size_t, */
 #include <stdint.h>    /* pid_t, size_t, */
 #include <sys/uio.h>   /* struct iovec, */
+#include <sys/ptrace.h>/* ptrace(2), PTRACE_*, */
 #include <errno.h>     /* ENAMETOOLONG, */
 
 #include "arch.h" /* word_t, */
 #include "tracee/tracee.h"
+
+/**
+ * Read one word at @address from the tracee with pid @pid using ptrace(PTRACE_PEEKDATA).
+ * Handles the differences between Android Bionic (which passes data pointer directly to the kernel)
+ * and glibc (which returns the word as the return value of ptrace).
+ * Returns 0 on success, or -errno on failure.
+ */
+static inline int peek_tracee_word_pid(pid_t pid, word_t address, word_t *result)
+{
+	long status;
+	word_t val = 0;
+
+	errno = 0;
+	address = UNTAG_ADDRESS(address);
+
+#if defined(__ANDROID__) || defined(__BIONIC__)
+	status = ptrace(PTRACE_PEEKDATA, pid, (void *)address, (void *)&val);
+	if (status < 0) {
+		return -errno;
+	}
+	*result = val;
+	return 0;
+#else
+	status = ptrace(PTRACE_PEEKDATA, pid, (void *)address, (void *)&val);
+	if (errno != 0) {
+		return -errno;
+	}
+	if (status != 0 && val == 0)
+		*result = (word_t)status;
+	else
+		*result = val;
+	return 0;
+#endif
+}
 
 extern int write_data(const Tracee *tracee, word_t dest_tracee, const void *src_tracer, word_t size);
 extern int writev_data(const Tracee *tracee, word_t dest_tracee, const struct iovec *src_tracer, int src_tracer_count);

@@ -192,7 +192,14 @@ static void check_ptrace(void)
 	waitpid(pid, &status, 0);
 	if (WIFSTOPPED(status)) {
 		/* Try a real ptrace operation on the stopped tracee. */
-		long ret = ptrace(PTRACE_PEEKDATA, pid, (void *)&g_mem_child_result, 0);
+		unsigned long peeked = 0;
+		long ret;
+		errno = 0;
+#if defined(__ANDROID__) || defined(__BIONIC__)
+		ret = ptrace(PTRACE_PEEKDATA, pid, (void *)&g_mem_child_result, (void *)&peeked);
+#else
+		ret = ptrace(PTRACE_PEEKDATA, pid, (void *)&g_mem_child_result, 0);
+#endif
 		ptrace(PTRACE_CONT, pid, 0, 0);
 		waitpid(pid, &status, 0);
 		if (ret != -1 || errno != EPERM) {
@@ -293,13 +300,23 @@ static void check_ptrace_untag(void)
 	uintptr_t addr = (uintptr_t)&g_untag_magic;
 	uintptr_t tagged = addr | 0xb400000000000000ULL;
 
+	unsigned long raw_val = 0, masked_val = 0;
 	errno = 0;
+#if defined(__ANDROID__) || defined(__BIONIC__)
+	long raw = ptrace(PTRACE_PEEKDATA, pid, (void *)tagged, (void *)&raw_val);
+#else
 	long raw = ptrace(PTRACE_PEEKDATA, pid, (void *)tagged, 0);
+#endif
 	int raw_errno = errno;
 
 	errno = 0;
-	long masked = ptrace(PTRACE_PEEKDATA, pid,
-			     UNTAGGED(tagged), 0);
+#if defined(__ANDROID__) || defined(__BIONIC__)
+	long masked = ptrace(PTRACE_PEEKDATA, pid, UNTAGGED(tagged), (void *)&masked_val);
+	if (masked == 0 && masked_val == UNTAG_MAGIC)
+		masked = (long)UNTAG_MAGIC;
+#else
+	long masked = ptrace(PTRACE_PEEKDATA, pid, UNTAGGED(tagged), 0);
+#endif
 
 	ptrace(PTRACE_CONT, pid, 0, 0);
 	waitpid(pid, &status, 0);
