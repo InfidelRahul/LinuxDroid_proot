@@ -180,9 +180,65 @@ void translate_syscall(Tracee *tracee)
 		else
 			(void) notify_extensions(tracee, SYSCALL_CHAINED_EXIT, 0, 0);
 
-		if (prev_status < 0) {
-			note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) tracee_status=%d -> result=%ld",
-				tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum), prev_status, (long)peek_reg(tracee, CURRENT, SYSARG_RESULT));
+		word_t final_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)final_result < 0 || prev_status < 0) {
+			word_t orig_arg1 = peek_reg(tracee, ORIGINAL, SYSARG_1);
+			word_t orig_arg2 = peek_reg(tracee, ORIGINAL, SYSARG_2);
+			word_t orig_arg3 = peek_reg(tracee, ORIGINAL, SYSARG_3);
+			word_t orig_arg4 = peek_reg(tracee, ORIGINAL, SYSARG_4);
+			word_t curr_arg1 = peek_reg(tracee, CURRENT, SYSARG_1);
+			word_t curr_arg2 = peek_reg(tracee, CURRENT, SYSARG_2);
+
+			char guest_path[PATH_MAX] = {0};
+			char host_path[PATH_MAX] = {0};
+
+			switch (orig_sysnum) {
+			case PR_openat:
+			case PR_faccessat:
+			case PR_faccessat2:
+			case PR_fstatat64:
+			case PR_newfstatat:
+			case PR_readlinkat:
+			case PR_unlinkat:
+			case PR_mkdirat:
+			case PR_mknodat:
+				(void) read_path(tracee, guest_path, orig_arg2);
+				(void) read_path(tracee, host_path, curr_arg2);
+				break;
+			case PR_open:
+			case PR_access:
+			case PR_stat:
+			case PR_stat64:
+			case PR_lstat:
+			case PR_lstat64:
+			case PR_statfs:
+			case PR_statfs64:
+			case PR_chdir:
+			case PR_rmdir:
+			case PR_unlink:
+			case PR_readlink:
+			case PR_execve:
+			case PR_execveat:
+				(void) read_path(tracee, guest_path, orig_arg1);
+				(void) read_path(tracee, host_path, curr_arg1);
+				break;
+			default:
+				break;
+			}
+
+			if (guest_path[0] != '\0' || host_path[0] != '\0') {
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) result=%ld (errno=%d), dirfd=%ld, guest_path='%s', host_path='%s', orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx)",
+					tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum),
+					(long)final_result, (int)(-((int)final_result)),
+					(long)orig_arg1, guest_path, host_path,
+					orig_arg1, orig_arg2, orig_arg3, orig_arg4);
+			} else {
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) result=%ld (errno=%d), orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx), curr_args=(0x%lx, 0x%lx)",
+					tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum),
+					(long)final_result, (int)(-((int)final_result)),
+					orig_arg1, orig_arg2, orig_arg3, orig_arg4,
+					curr_arg1, curr_arg2);
+			}
 		}
 
 		/* Reset the tracee's status. */
