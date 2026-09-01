@@ -410,9 +410,13 @@ int event_loop()
 	return last_exit_status;
 }
 
-static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys UNUSED)
+static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys)
 {
-	word_t sysnum = get_sysnum(tracee, ORIGINAL);
+	Sysnum sysnum;
+	if (sig_sys >= 0)
+		sysnum = translate_sysnum(get_abi(tracee), (word_t)sig_sys);
+	else
+		sysnum = get_sysnum(tracee, ORIGINAL);
 
 	switch (sysnum) {
 	case PR_setuid:
@@ -437,6 +441,8 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys UNUSED
 	case PR_setdomainname:
 	case PR_sethostname:
 	case PR_chroot:
+	case PR_set_robust_list:
+	case PR_get_robust_list:
 		return 0;
 
 	case PR_capget: {
@@ -586,14 +592,19 @@ static int handle_tracee_event_kernel_4_8(Tracee *tracee, int tracee_status)
 			if (siginfo.si_code == 1 /* SYS_SECCOMP */) {
 				status = fetch_regs(tracee);
 				if (status >= 0) {
+					save_current_regs(tracee, ORIGINAL);
+					if (sig_sys >= 0) {
+						poke_reg(tracee, SYSARG_NUM, (word_t) sig_sys);
+						save_current_regs(tracee, ORIGINAL);
+					}
 					word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
 					poke_reg(tracee, SYSARG_RESULT, emulated_result);
-					save_current_regs(tracee, ORIGINAL);
 					tracee->_regs_were_changed = true;
 					(void) push_regs(tracee);
 
-					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld)",
-						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)get_sysnum(tracee, ORIGINAL));
+					Sysnum emulated_sysnum = (sig_sys >= 0) ? translate_sysnum(get_abi(tracee), (word_t)sig_sys) : get_sysnum(tracee, ORIGINAL);
+					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
+						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
 					signal = 0;
 				}
 			}
@@ -879,14 +890,19 @@ int handle_tracee_event(Tracee *tracee, int tracee_status)
 			if (siginfo.si_code == 1 /* SYS_SECCOMP */) {
 				status = fetch_regs(tracee);
 				if (status >= 0) {
+					save_current_regs(tracee, ORIGINAL);
+					if (sig_sys >= 0) {
+						poke_reg(tracee, SYSARG_NUM, (word_t) sig_sys);
+						save_current_regs(tracee, ORIGINAL);
+					}
 					word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
 					poke_reg(tracee, SYSARG_RESULT, emulated_result);
-					save_current_regs(tracee, ORIGINAL);
 					tracee->_regs_were_changed = true;
 					(void) push_regs(tracee);
 
-					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld)",
-						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)get_sysnum(tracee, ORIGINAL));
+					Sysnum emulated_sysnum = (sig_sys >= 0) ? translate_sysnum(get_abi(tracee), (word_t)sig_sys) : get_sysnum(tracee, ORIGINAL);
+					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
+						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
 					signal = 0;
 				}
 			}

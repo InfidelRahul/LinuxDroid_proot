@@ -78,7 +78,7 @@ static void get_sysnums(Abi abi, Sysnums *sysnums)
 /**
  * Return the neutral value of @sysnum from the given @abi.
  */
-static Sysnum translate_sysnum(Abi abi, word_t sysnum)
+Sysnum translate_sysnum(Abi abi, word_t sysnum)
 {
 	Sysnums sysnums;
 	word_t index;
