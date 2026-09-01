@@ -23,7 +23,13 @@
 #include <assert.h>      /* assert(3), */
 #include <limits.h>      /* PATH_MAX, */
 #include <string.h>      /* strlen(3), */
+#include <strings.h>     /* bzero(3), */
+#include <stdio.h>       /* snprintf(3), */
 #include <errno.h>       /* errno(3), E* */
+#include <sys/socket.h>  /* struct sockaddr_un, AF_UNIX, */
+#include <sys/un.h>      /* struct sockaddr_un, */
+#include <netinet/in.h>  /* struct sockaddr_in, struct sockaddr_in6, */
+#include <arpa/inet.h>    /* inet_ntop(3), */
 
 #include "syscall/syscall.h"
 #include "syscall/chain.h"
@@ -105,6 +111,122 @@ int set_sysarg_path(Tracee *tracee, const char path[PATH_MAX], Reg reg)
 	return set_sysarg_data(tracee, path, strlen(path) + 1, reg);
 }
 
+/**
+ * Safely decodes syscall context, target paths, flags, mode, and socket destination
+ * for rich diagnostic telemetry without unsafe pointer dereferences.
+ */
+static void decode_syscall_args(const Tracee *tracee, Sysnum orig_sysnum,
+				char guest_path[PATH_MAX], char host_path[PATH_MAX],
+				char socket_info[256], long *dirfd_out,
+				word_t *flags_out, word_t *mode_out)
+{
+	word_t orig_arg1 = peek_reg(tracee, ORIGINAL, SYSARG_1);
+	word_t orig_arg2 = peek_reg(tracee, ORIGINAL, SYSARG_2);
+	word_t orig_arg3 = peek_reg(tracee, ORIGINAL, SYSARG_3);
+	word_t orig_arg4 = peek_reg(tracee, ORIGINAL, SYSARG_4);
+	word_t curr_arg1 = peek_reg(tracee, CURRENT, SYSARG_1);
+	word_t curr_arg2 = peek_reg(tracee, CURRENT, SYSARG_2);
+
+	guest_path[0] = '\0';
+	host_path[0] = '\0';
+	socket_info[0] = '\0';
+	*dirfd_out = -100; /* AT_FDCWD */
+	*flags_out = 0;
+	*mode_out = 0;
+
+	switch (orig_sysnum) {
+	case PR_openat:
+		*dirfd_out = (long)orig_arg1;
+		(void) read_path(tracee, guest_path, orig_arg2);
+		*flags_out = orig_arg3;
+		*mode_out = orig_arg4;
+		(void) read_path(tracee, host_path, curr_arg2);
+		break;
+	case PR_faccessat:
+	case PR_faccessat2:
+		*dirfd_out = (long)orig_arg1;
+		(void) read_path(tracee, guest_path, orig_arg2);
+		*mode_out = orig_arg3;
+		*flags_out = orig_arg4;
+		(void) read_path(tracee, host_path, curr_arg2);
+		break;
+	case PR_fstatat64:
+	case PR_newfstatat:
+	case PR_readlinkat:
+	case PR_unlinkat:
+	case PR_mkdirat:
+	case PR_mknodat:
+		*dirfd_out = (long)orig_arg1;
+		(void) read_path(tracee, guest_path, orig_arg2);
+		*flags_out = orig_arg3;
+		*mode_out = orig_arg4;
+		(void) read_path(tracee, host_path, curr_arg2);
+		break;
+	case PR_open:
+	case PR_access:
+	case PR_stat:
+	case PR_stat64:
+	case PR_lstat:
+	case PR_lstat64:
+	case PR_statfs:
+	case PR_statfs64:
+	case PR_chdir:
+	case PR_rmdir:
+	case PR_unlink:
+	case PR_readlink:
+	case PR_execve:
+	case PR_execveat:
+		(void) read_path(tracee, guest_path, orig_arg1);
+		*flags_out = orig_arg2;
+		*mode_out = orig_arg3;
+		(void) read_path(tracee, host_path, curr_arg1);
+		break;
+	case PR_connect:
+	case PR_bind: {
+		int sockfd = (int)orig_arg1;
+		word_t sock_addr = orig_arg2;
+		word_t sock_len = orig_arg3;
+		*dirfd_out = sockfd;
+		if (sock_addr != 0 && sock_len > 0) {
+			struct sockaddr_storage ss;
+			bzero(&ss, sizeof(ss));
+			size_t read_len = (sock_len < sizeof(ss)) ? (size_t)sock_len : sizeof(ss);
+			if (read_data(tracee, &ss, sock_addr, read_len) >= 0) {
+				if (ss.ss_family == AF_UNIX) {
+					struct sockaddr_un *sun = (struct sockaddr_un *)&ss;
+					if (sun->sun_path[0] == '\0' && sock_len > sizeof(sa_family_t)) {
+						snprintf(socket_info, 256, "unix:@%.*s", (int)(sock_len - sizeof(sa_family_t) - 1), sun->sun_path + 1);
+					} else {
+						snprintf(socket_info, 256, "unix:%s", sun->sun_path);
+					}
+					strncpy(guest_path, socket_info, PATH_MAX - 1);
+				} else if (ss.ss_family == AF_INET) {
+					struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
+					char ip_str[INET_ADDRSTRLEN] = {0};
+					inet_ntop(AF_INET, &sin->sin_addr, ip_str, sizeof(ip_str));
+					snprintf(socket_info, 256, "inet:%s:%u", ip_str, ntohs(sin->sin_port));
+					strncpy(guest_path, socket_info, PATH_MAX - 1);
+				} else if (ss.ss_family == AF_INET6) {
+					struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ss;
+					char ip_str[INET6_ADDRSTRLEN] = {0};
+					inet_ntop(AF_INET6, &sin6->sin6_addr, ip_str, sizeof(ip_str));
+					snprintf(socket_info, 256, "inet6:[%s]:%u", ip_str, ntohs(sin6->sin6_port));
+					strncpy(guest_path, socket_info, PATH_MAX - 1);
+				} else if (ss.ss_family == 16 /* AF_NETLINK */) {
+					snprintf(socket_info, 256, "netlink:fd=%d", sockfd);
+					strncpy(guest_path, socket_info, PATH_MAX - 1);
+				} else {
+					snprintf(socket_info, 256, "family=%d", ss.ss_family);
+				}
+			}
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 void translate_syscall(Tracee *tracee)
 {
 	const bool is_enter_stage = IS_IN_SYSENTER(tracee);
@@ -141,6 +263,16 @@ void translate_syscall(Tracee *tracee)
 		 * by the translation/extension. */
 		if (status < 0) {
 			Sysnum orig_sysnum = get_sysnum(tracee, ORIGINAL);
+			word_t raw_sysnum = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
+			char guest_path[PATH_MAX] = {0};
+			char host_path[PATH_MAX] = {0};
+			char socket_info[256] = {0};
+			long dirfd = -100;
+			word_t flags = 0;
+			word_t mode = 0;
+
+			decode_syscall_args(tracee, orig_sysnum, guest_path, host_path, socket_info, &dirfd, &flags, &mode);
+
 			set_sysnum(tracee, PR_void);
 			poke_reg(tracee, SYSARG_RESULT, (word_t) status);
 			tracee->status = status;
@@ -148,8 +280,15 @@ void translate_syscall(Tracee *tracee)
 				tracee->restart_how = PTRACE_SYSCALL;
 				tracee->sysexit_pending = true;
 			}
-			note(tracee, INFO, INTERNAL, "[SYSCALL_ENTER_ERR] pid=%d: sysnum=%ld (%s) status=%d -> PR_void, restart_how=%d, sysexit_pending=%d",
-				tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum), status, tracee->restart_how, tracee->sysexit_pending);
+			if (guest_path[0] != '\0' || host_path[0] != '\0' || socket_info[0] != '\0') {
+				note(tracee, INFO, INTERNAL, "[SYSCALL_ENTER_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) status=%d -> PR_void, dirfd=%ld, guest_path='%s', host_path='%s', flags=0x%lx, mode=0x%lx, socket='%s'",
+					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
+					status, dirfd, guest_path, host_path, flags, mode, socket_info);
+			} else {
+				note(tracee, INFO, INTERNAL, "[SYSCALL_ENTER_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) status=%d -> PR_void, restart_how=%d, sysexit_pending=%d",
+					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
+					status, tracee->restart_how, tracee->sysexit_pending);
+			}
 		}
 		else
 			tracee->status = 1;
@@ -182,59 +321,30 @@ void translate_syscall(Tracee *tracee)
 
 		word_t final_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 		if ((int)final_result < 0 || prev_status < 0) {
-			word_t orig_arg1 = peek_reg(tracee, ORIGINAL, SYSARG_1);
-			word_t orig_arg2 = peek_reg(tracee, ORIGINAL, SYSARG_2);
-			word_t orig_arg3 = peek_reg(tracee, ORIGINAL, SYSARG_3);
-			word_t orig_arg4 = peek_reg(tracee, ORIGINAL, SYSARG_4);
-			word_t curr_arg1 = peek_reg(tracee, CURRENT, SYSARG_1);
-			word_t curr_arg2 = peek_reg(tracee, CURRENT, SYSARG_2);
-
+			word_t raw_sysnum = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
 			char guest_path[PATH_MAX] = {0};
 			char host_path[PATH_MAX] = {0};
+			char socket_info[256] = {0};
+			long dirfd = -100;
+			word_t flags = 0;
+			word_t mode = 0;
 
-			switch (orig_sysnum) {
-			case PR_openat:
-			case PR_faccessat:
-			case PR_faccessat2:
-			case PR_fstatat64:
-			case PR_newfstatat:
-			case PR_readlinkat:
-			case PR_unlinkat:
-			case PR_mkdirat:
-			case PR_mknodat:
-				(void) read_path(tracee, guest_path, orig_arg2);
-				(void) read_path(tracee, host_path, curr_arg2);
-				break;
-			case PR_open:
-			case PR_access:
-			case PR_stat:
-			case PR_stat64:
-			case PR_lstat:
-			case PR_lstat64:
-			case PR_statfs:
-			case PR_statfs64:
-			case PR_chdir:
-			case PR_rmdir:
-			case PR_unlink:
-			case PR_readlink:
-			case PR_execve:
-			case PR_execveat:
-				(void) read_path(tracee, guest_path, orig_arg1);
-				(void) read_path(tracee, host_path, curr_arg1);
-				break;
-			default:
-				break;
-			}
+			decode_syscall_args(tracee, orig_sysnum, guest_path, host_path, socket_info, &dirfd, &flags, &mode);
 
-			if (guest_path[0] != '\0' || host_path[0] != '\0') {
-				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) result=%ld (errno=%d), dirfd=%ld, guest_path='%s', host_path='%s', orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx)",
-					tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum),
+			if (guest_path[0] != '\0' || host_path[0] != '\0' || socket_info[0] != '\0') {
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=%ld (errno=%d), dirfd=%ld, guest_path='%s', host_path='%s', flags=0x%lx, mode=0x%lx, socket='%s'",
+					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
 					(long)final_result, (int)(-((int)final_result)),
-					(long)orig_arg1, guest_path, host_path,
-					orig_arg1, orig_arg2, orig_arg3, orig_arg4);
+					dirfd, guest_path, host_path, flags, mode, socket_info);
 			} else {
-				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (%s) result=%ld (errno=%d), orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx), curr_args=(0x%lx, 0x%lx)",
-					tracee->pid, (long)orig_sysnum, stringify_sysnum(orig_sysnum),
+				word_t orig_arg1 = peek_reg(tracee, ORIGINAL, SYSARG_1);
+				word_t orig_arg2 = peek_reg(tracee, ORIGINAL, SYSARG_2);
+				word_t orig_arg3 = peek_reg(tracee, ORIGINAL, SYSARG_3);
+				word_t orig_arg4 = peek_reg(tracee, ORIGINAL, SYSARG_4);
+				word_t curr_arg1 = peek_reg(tracee, CURRENT, SYSARG_1);
+				word_t curr_arg2 = peek_reg(tracee, CURRENT, SYSARG_2);
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=%ld (errno=%d), orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx), curr_args=(0x%lx, 0x%lx)",
+					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
 					(long)final_result, (int)(-((int)final_result)),
 					orig_arg1, orig_arg2, orig_arg3, orig_arg4,
 					curr_arg1, curr_arg2);
