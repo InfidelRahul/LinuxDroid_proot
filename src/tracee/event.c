@@ -103,18 +103,6 @@ int launch_process(Tracee *tracee, char *const argv[])
 			}
 		}
 
-#if defined(__ANDROID__) && defined(__aarch64__)
-# ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-#  define M_BIONIC_SET_HEAP_TAGGING_LEVEL -204
-# endif
-# ifndef M_HEAP_TAGGING_LEVEL_NONE
-#  define M_HEAP_TAGGING_LEVEL_NONE 0
-# endif
-		/* Ensure child heap allocations are untagged prior to execvp */
-		extern int mallopt(int param, int value) __attribute__((weak));
-		if (mallopt != NULL)
-			mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-#endif
 
 		/* Now process is ptraced, so the current rootfs is already the
 		 * guest rootfs.  Note: Valgrind can't handle execve(2) on
@@ -454,8 +442,6 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys)
 		return 0;
 	}
 
-	case PR_prctl:
-		return 0;
 
 	case PR_getgroups:
 	case PR_getgroups32: {
@@ -493,32 +479,6 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys)
 		return 0;
 	}
 
-	case PR_getcwd: {
-		word_t output = peek_reg(tracee, ORIGINAL, SYSARG_1);
-		size_t size = (size_t) peek_reg(tracee, ORIGINAL, SYSARG_2);
-		size_t cwd_len;
-		int status;
-
-		if (size == 0)
-			return (word_t)-EINVAL;
-
-		if (tracee->fs == NULL || tracee->fs->cwd == NULL)
-			return (word_t)-ENOENT;
-
-		cwd_len = strlen(tracee->fs->cwd) + 1;
-		if (size < cwd_len)
-			return (word_t)-ERANGE;
-
-		if (output == 0)
-			return (word_t)-EFAULT;
-
-		status = write_data(tracee, output, tracee->fs->cwd, cwd_len);
-		if (status < 0)
-			return (word_t)status;
-
-		return (word_t)cwd_len;
-	}
-
 	case PR_faccessat:
 	case PR_faccessat2: {
 		int dirfd = (int)peek_reg(tracee, ORIGINAL, SYSARG_1);
@@ -547,9 +507,6 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys)
 			status = fstatat(AT_FDCWD, host_path, &st, AT_SYMLINK_NOFOLLOW);
 		} else {
 			status = faccessat(AT_FDCWD, host_path, mode, flags);
-			if (status < 0 && errno == EINVAL) {
-				status = faccessat(AT_FDCWD, host_path, mode, 0);
-			}
 		}
 		if (status < 0)
 			return (word_t)-errno;

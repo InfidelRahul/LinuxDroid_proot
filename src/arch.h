@@ -26,12 +26,19 @@
 #ifndef NO_LIBC_HEADER
 #include <sys/ptrace.h>    /* linux.git:c0a3a20b  */
 #include <linux/audit.h>   /* AUDIT_ARCH_*,  */
+#if defined(__ANDROID__)
+#include <asm/unistd.h>
+#endif
 #endif
 
 typedef unsigned long word_t;
 typedef unsigned char byte_t;
 
+#if defined(__ANDROID__)
+#define SYSCALL_AVOIDER ((word_t) __NR_getpid)
+#else
 #define SYSCALL_AVOIDER ((word_t) -1)
+#endif
 #define SYSTRAP_NUM SYSARG_NUM
 #define STACK_ALIGNMENT 16
 

@@ -115,13 +115,11 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 
 		strcpy(final, intermediate);
 		strcat(final, ".0002");
-		(void) unlink(final);
 		status = rename(original, final);
 		if (status < 0)
 			return -errno;
 
 		/* Symlink the intermediate to the final file.  */
-		(void) unlink(intermediate);
 		status = symlink(final, intermediate);
 		if (status < 0)
 			return -errno;
@@ -142,7 +140,6 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 		strncpy(new_final, final, strlen(final) - 4);
 		sprintf(new_final + strlen(final) - 4, "%04d", link_count);
 
-		(void) unlink(new_final);
 		status = rename(final, new_final);
 		if (status < 0)
 			return -errno;
@@ -196,7 +193,7 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 
 	size = my_readlink(original, intermediate);
 	if (size < 0)
-		return 0;
+		return size;
 
 	name = strrchr(intermediate, '/');
 	if (name == NULL)
@@ -210,7 +207,7 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 
 	size = my_readlink(intermediate, final);
 	if (size < 0)
-		return 0;
+		return size;
 
 	link_count = atoi(final + strlen(final) - 4);
 	link_count--;
@@ -233,8 +230,12 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 			return -errno;
 	} else {
 		/* If it is the last, delete the intermediate and final */
-		(void) unlink(intermediate);
-		(void) unlink(final);
+		status = unlink(intermediate);
+		if (status < 0)
+			return -errno;
+		status = unlink(final);
+		if (status < 0)
+			return -errno;
 	}
 
 	return 0;

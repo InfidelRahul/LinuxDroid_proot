@@ -464,18 +464,6 @@ static void talloc_log_to_note(const char *message)
 
 int main(int argc, char *const argv[])
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
-# ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-#  define M_BIONIC_SET_HEAP_TAGGING_LEVEL -204
-# endif
-# ifndef M_HEAP_TAGGING_LEVEL_NONE
-#  define M_HEAP_TAGGING_LEVEL_NONE 0
-# endif
-	/* On Android 11-16 (API 30-36), configure Bionic heap allocator to return untagged pointers */
-	extern int mallopt(int param, int value) __attribute__((weak));
-	if (mallopt != NULL)
-		mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-#endif
 
 	Tracee *tracee;
 	int status;

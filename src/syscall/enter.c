@@ -140,49 +140,10 @@ int translate_syscall_enter(Tracee *tracee)
 		status = 0;
 		break;
 
-	case PR_getcwd: {
-		/* Android kernels enforce a seccomp policy that rejects syscall
-		 * numbers outside the normal range with SIGSYS. When PRoot
-		 * replaces getcwd with PR_void (SYSCALL_AVOIDER = -1), Android's
-		 * own seccomp filter fires a SIGSYS before PRoot's ptrace sysexit
-		 * stage can run, causing the exit handler to be bypassed and
-		 * getcwd() to return ENOSYS to the tracee.
-		 *
-		 * Fix: eagerly write the guest CWD into the tracee's output
-		 * buffer right here on entry, then replace the syscall with
-		 * PR_getpid -- a harmless no-op that Android's seccomp always
-		 * permits. The ptrace sysexit stage will run normally, and the
-		 * exit handler (exit.c PR_getcwd case) will confirm the CWD and
-		 * set the return value to the CWD length.
-		 */
-		size_t size;
-		size_t cwd_len;
-		word_t output;
-
-		size = (size_t) peek_reg(tracee, CURRENT, SYSARG_2);
-		if (size == 0) {
-			status = -EINVAL;
-			break;
-		}
-
-		cwd_len = strlen(tracee->fs->cwd) + 1;
-		if (size < cwd_len) {
-			status = -ERANGE;
-			break;
-		}
-
-		/* Pre-populate the output buffer so that even if the exit handler
-		 * cannot run (rare seccomp edge-case), the CWD is already there. */
-		output = peek_reg(tracee, CURRENT, SYSARG_1);
-		status = write_data(tracee, output, tracee->fs->cwd, cwd_len);
-		if (status < 0)
-			break;
-
-		/* Use getpid -- always allowed on Android, never triggers SIGSYS. */
-		set_sysnum(tracee, PR_getpid);
+	case PR_getcwd:
+		set_sysnum(tracee, PR_void);
 		status = 0;
 		break;
-	}
 
 	case PR_fchdir:
 	case PR_chdir: {
