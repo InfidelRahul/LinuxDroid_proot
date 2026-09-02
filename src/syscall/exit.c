@@ -95,7 +95,7 @@ void translate_syscall_exit(Tracee *tracee)
 			break;
 		}
 
-		/* Ensure cwd still exists.  */
+		/* Ensure the cwd still exists on the host filesystem.  */
 		status = translate_path(tracee, path, AT_FDCWD, ".", false);
 		if (status < 0)
 			break;
@@ -106,14 +106,15 @@ void translate_syscall_exit(Tracee *tracee)
 			break;
 		}
 
-		/* Overwrite the path.  */
+		/* Write the guest-visible CWD into the tracee's output buffer.
+		 * This overrides any result written by the enter handler and
+		 * handles the case where the buffer was not yet populated.  */
 		output = peek_reg(tracee, ORIGINAL, SYSARG_1);
 		status = write_data(tracee, output, tracee->fs->cwd, new_size);
 		if (status < 0)
 			break;
 
-		/* The value of "status" is used to update the returned value
-		 * in translate_syscall_exit().  */
+		/* Return the length of the CWD string (including NUL).  */
 		status = new_size;
 		break;
 	}

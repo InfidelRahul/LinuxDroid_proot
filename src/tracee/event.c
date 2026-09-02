@@ -470,6 +470,55 @@ static word_t emulate_seccomp_trapped_syscall(Tracee *tracee, int sig_sys)
 		}
 	}
 
+	case PR_getuid:
+	case PR_getuid32:
+	case PR_geteuid:
+	case PR_geteuid32:
+	case PR_getgid:
+	case PR_getgid32:
+	case PR_getegid:
+	case PR_getegid32:
+		return 0;
+
+	case PR_getresuid:
+	case PR_getresuid32:
+	case PR_getresgid:
+	case PR_getresgid32: {
+		word_t r = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		word_t e = peek_reg(tracee, ORIGINAL, SYSARG_2);
+		word_t s = peek_reg(tracee, ORIGINAL, SYSARG_3);
+		if (r != 0) poke_uint32(tracee, r, 0);
+		if (e != 0) poke_uint32(tracee, e, 0);
+		if (s != 0) poke_uint32(tracee, s, 0);
+		return 0;
+	}
+
+	case PR_getcwd: {
+		word_t output = peek_reg(tracee, ORIGINAL, SYSARG_1);
+		size_t size = (size_t) peek_reg(tracee, ORIGINAL, SYSARG_2);
+		size_t cwd_len;
+		int status;
+
+		if (size == 0)
+			return (word_t)-EINVAL;
+
+		if (tracee->fs == NULL || tracee->fs->cwd == NULL)
+			return (word_t)-ENOENT;
+
+		cwd_len = strlen(tracee->fs->cwd) + 1;
+		if (size < cwd_len)
+			return (word_t)-ERANGE;
+
+		if (output == 0)
+			return (word_t)-EFAULT;
+
+		status = write_data(tracee, output, tracee->fs->cwd, cwd_len);
+		if (status < 0)
+			return (word_t)status;
+
+		return (word_t)cwd_len;
+	}
+
 	case PR_faccessat:
 	case PR_faccessat2: {
 		int dirfd = (int)peek_reg(tracee, ORIGINAL, SYSARG_1);
@@ -592,19 +641,33 @@ static int handle_tracee_event_kernel_4_8(Tracee *tracee, int tracee_status)
 			if (siginfo.si_code == 1 /* SYS_SECCOMP */) {
 				status = fetch_regs(tracee);
 				if (status >= 0) {
-					save_current_regs(tracee, ORIGINAL);
 					if (sig_sys >= 0) {
+						save_current_regs(tracee, ORIGINAL);
 						poke_reg(tracee, SYSARG_NUM, (word_t) sig_sys);
 						save_current_regs(tracee, ORIGINAL);
-					}
-					word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
-					poke_reg(tracee, SYSARG_RESULT, emulated_result);
-					tracee->_regs_were_changed = true;
-					(void) push_regs(tracee);
+						word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
+						poke_reg(tracee, SYSARG_RESULT, emulated_result);
+						tracee->_regs_were_changed = true;
+						(void) push_regs(tracee);
 
-					Sysnum emulated_sysnum = (sig_sys >= 0) ? translate_sysnum(get_abi(tracee), (word_t)sig_sys) : get_sysnum(tracee, ORIGINAL);
-					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
-						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
+						Sysnum emulated_sysnum = translate_sysnum(get_abi(tracee), (word_t)sig_sys);
+						note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
+							tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
+					} else {
+						/* sig_sys < 0: syscall was voided/cancelled by PRoot (set_sysnum to SYSCALL_AVOIDER -1).
+						 * Android's seccomp filter trapped the -1 syscall number.
+						 * The result register (SYSARG_RESULT) was already assigned by PRoot during sysenter translation
+						 * (e.g., tracee->status for errors such as -ENOENT, or explicit return value).
+						 * Preserving this result prevents clobbering with -ENOSYS. */
+						word_t preserved_result = (tracee->status < 0) ? (word_t)tracee->status : peek_reg(tracee, CURRENT, SYSARG_RESULT);
+						poke_reg(tracee, SYSARG_RESULT, preserved_result);
+						tracee->_regs_were_changed = true;
+						(void) push_regs(tracee);
+
+						Sysnum orig_sysnum = get_sysnum(tracee, ORIGINAL);
+						note(tracee, INFO, INTERNAL, "[SECCOMP_VOID_PRESERVED] pid=%d (vpid %" PRIu64 "): preserved return %ld for voided syscall -1 (orig sysnum %ld, %s)",
+							tracee->pid, tracee->vpid, (long)preserved_result, (long)orig_sysnum, stringify_sysnum(orig_sysnum));
+					}
 					signal = 0;
 				}
 			}
@@ -890,19 +953,33 @@ int handle_tracee_event(Tracee *tracee, int tracee_status)
 			if (siginfo.si_code == 1 /* SYS_SECCOMP */) {
 				status = fetch_regs(tracee);
 				if (status >= 0) {
-					save_current_regs(tracee, ORIGINAL);
 					if (sig_sys >= 0) {
+						save_current_regs(tracee, ORIGINAL);
 						poke_reg(tracee, SYSARG_NUM, (word_t) sig_sys);
 						save_current_regs(tracee, ORIGINAL);
-					}
-					word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
-					poke_reg(tracee, SYSARG_RESULT, emulated_result);
-					tracee->_regs_were_changed = true;
-					(void) push_regs(tracee);
+						word_t emulated_result = emulate_seccomp_trapped_syscall(tracee, sig_sys);
+						poke_reg(tracee, SYSARG_RESULT, emulated_result);
+						tracee->_regs_were_changed = true;
+						(void) push_regs(tracee);
 
-					Sysnum emulated_sysnum = (sig_sys >= 0) ? translate_sysnum(get_abi(tracee), (word_t)sig_sys) : get_sysnum(tracee, ORIGINAL);
-					note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
-						tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
+						Sysnum emulated_sysnum = translate_sysnum(get_abi(tracee), (word_t)sig_sys);
+						note(tracee, INFO, INTERNAL, "[SECCOMP_EMULATED] pid=%d (vpid %" PRIu64 "): emulated return %ld for trapped syscall %d (sysnum %ld, %s)",
+							tracee->pid, tracee->vpid, (long)emulated_result, sig_sys, (long)emulated_sysnum, stringify_sysnum(emulated_sysnum));
+					} else {
+						/* sig_sys < 0: syscall was voided/cancelled by PRoot (set_sysnum to SYSCALL_AVOIDER -1).
+						 * Android's seccomp filter trapped the -1 syscall number.
+						 * The result register (SYSARG_RESULT) was already assigned by PRoot during sysenter translation
+						 * (e.g., tracee->status for errors such as -ENOENT, or explicit return value).
+						 * Preserving this result prevents clobbering with -ENOSYS. */
+						word_t preserved_result = (tracee->status < 0) ? (word_t)tracee->status : peek_reg(tracee, CURRENT, SYSARG_RESULT);
+						poke_reg(tracee, SYSARG_RESULT, preserved_result);
+						tracee->_regs_were_changed = true;
+						(void) push_regs(tracee);
+
+						Sysnum orig_sysnum = get_sysnum(tracee, ORIGINAL);
+						note(tracee, INFO, INTERNAL, "[SECCOMP_VOID_PRESERVED] pid=%d (vpid %" PRIu64 "): preserved return %ld for voided syscall -1 (orig sysnum %ld, %s)",
+							tracee->pid, tracee->vpid, (long)preserved_result, (long)orig_sysnum, stringify_sysnum(orig_sysnum));
+					}
 					signal = 0;
 				}
 			}
