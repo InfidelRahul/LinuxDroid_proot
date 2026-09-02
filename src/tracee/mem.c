@@ -457,6 +457,8 @@ word_t peek_word(const Tracee *tracee, word_t address)
 		return 0;
 	}
 
+	errno = 0;
+
 	/* Use only the 32 LSB when running a 32-bit process on a
 	 * 64-bit kernel. */
 	if (is_32on64_mode(tracee))

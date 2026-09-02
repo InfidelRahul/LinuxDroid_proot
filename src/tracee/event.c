@@ -769,8 +769,8 @@ static int handle_tracee_event_kernel_4_8(Tracee *tracee, int tracee_status)
 			(void) new_child(tracee, 0);
 			break;
 
-		case SIGTRAP | PTRACE_EVENT_VFORK_DONE << 8:
 		case SIGTRAP | PTRACE_EVENT_EXEC  << 8:
+		case SIGTRAP | PTRACE_EVENT_VFORK_DONE << 8:
 		case SIGTRAP | PTRACE_EVENT_EXIT  << 8:
 			signal = 0;
 			break;

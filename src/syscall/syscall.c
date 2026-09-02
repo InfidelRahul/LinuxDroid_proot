@@ -290,8 +290,15 @@ void translate_syscall(Tracee *tracee)
 					status, tracee->restart_how, tracee->sysexit_pending);
 			}
 		}
-		else
+		else {
 			tracee->status = 1;
+			if (get_sysnum(tracee, MODIFIED) == PR_void || get_sysnum(tracee, CURRENT) == PR_void) {
+				if (tracee->seccomp == ENABLED) {
+					tracee->restart_how = PTRACE_SYSCALL;
+					tracee->sysexit_pending = true;
+				}
+			}
+		}
 
 		/* Restore tracee's stack pointer now if it won't hit
 		 * the sysexit stage (i.e. when seccomp is enabled and

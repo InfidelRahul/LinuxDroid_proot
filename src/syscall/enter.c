@@ -518,6 +518,12 @@ int translate_syscall_enter(Tracee *tracee)
 			status = translate_path2(tracee, dirfd, path, SYSARG_2, REGULAR);
 		break;
 
+	case PR_openat2:
+		/* glibc 2.38+ calls openat2 first; returning -ENOSYS cleanly triggers
+		 * glibc's deterministic fallback to openat, avoiding complex RESOLVE_* flags. */
+		status = -ENOSYS;
+		break;
+
 	case PR_readlinkat:
 	case PR_unlinkat:
 	case PR_mkdirat:

@@ -458,12 +458,8 @@ void translate_execve_exit(Tracee *tracee)
 	}
 
 	syscall_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-	if ((int) syscall_result < 0) {
-		int saved_err = -(int)syscall_result;
-		note(tracee, ERROR, INTERNAL, "[EXECVE_KERNEL_FAIL] pid=%d, kernel execve failed with errno=%d: %s",
-			tracee->pid, saved_err, strerror(saved_err));
+	if ((int) syscall_result < 0)
 		return;
-	}
 
 	note(tracee, INFO, INTERNAL, "[EXECVE_KERNEL_OK] pid=%d, kernel execve succeeded, transferring load script", tracee->pid);
 

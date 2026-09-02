@@ -307,8 +307,9 @@ int push_regs(Tracee *tracee)
 		 * subcommand has been added to PTRACE_{S,G}ETREGSET
 		 * to allow write/read of current sycall number.  */
 		if (current_sysnum != REG(tracee, ORIGINAL, SYSARG_NUM)) {
-			regs.iov_base = &current_sysnum;
-			regs.iov_len = sizeof(current_sysnum);
+			int syscallno = (int) current_sysnum;
+			regs.iov_base = &syscallno;
+			regs.iov_len = sizeof(syscallno);
 			status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_ARM_SYSTEM_CALL, &regs);
 			if (status < 0)
 				note(tracee, WARNING, SYSTEM, "can't set the syscall number");

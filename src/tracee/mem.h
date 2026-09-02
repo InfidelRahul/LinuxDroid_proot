@@ -41,30 +41,16 @@
  */
 static inline int peek_tracee_word_pid(pid_t pid, word_t address, word_t *result)
 {
-	long status;
-	word_t val = 0;
-
 	errno = 0;
 	address = UNTAG_ADDRESS(address);
 
-#if defined(__ANDROID__) || defined(__BIONIC__)
-	status = ptrace(PTRACE_PEEKDATA, pid, (void *)address, (void *)&val);
-	if (status < 0) {
+	long ret = ptrace(PTRACE_PEEKDATA, pid, (void *)address, NULL);
+	if (ret == -1 && errno != 0) {
 		return -errno;
 	}
-	*result = val;
+
+	*result = (word_t)(unsigned long)ret;
 	return 0;
-#else
-	status = ptrace(PTRACE_PEEKDATA, pid, (void *)address, (void *)&val);
-	if (errno != 0) {
-		return -errno;
-	}
-	if (status != 0 && val == 0)
-		*result = (word_t)status;
-	else
-		*result = val;
-	return 0;
-#endif
 }
 
 extern int write_data(const Tracee *tracee, word_t dest_tracee, const void *src_tracer, word_t size);
