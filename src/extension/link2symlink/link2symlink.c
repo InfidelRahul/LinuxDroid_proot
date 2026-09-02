@@ -29,7 +29,7 @@ static int my_readlink(const char symlink[PATH_MAX], char value[PATH_MAX])
 
 	size = readlink(symlink, value, PATH_MAX);
 	if (size < 0)
-		return size;
+		return -errno;
 	if (size >= PATH_MAX)
 		return -ENAMETOOLONG;
 	value[size] = '\0';
@@ -68,7 +68,7 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 	/* Sanity check: directories can't be linked.  */
 	status = lstat(original, &statl);
 	if (status < 0)
-		return status;
+		return -errno;
 	if (S_ISDIR(statl.st_mode))
 		return -EPERM;
 
@@ -105,20 +105,23 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 	}
 
 	if (first_link) {
-		/*Move the original content to the new path. */
+		struct stat dummy;
+		/* Move the original content to the new path. */
 		do {
 			sprintf(new_intermediate, "%s%04d", intermediate, intermediate_suffix);
 			intermediate_suffix++;
-		} while ((access(new_intermediate,F_OK) != -1) && (intermediate_suffix < 1000));
+		} while ((lstat(new_intermediate, &dummy) == 0) && (intermediate_suffix < 1000));
 		strcpy(intermediate, new_intermediate);
 
 		strcpy(final, intermediate);
 		strcat(final, ".0002");
+		(void) unlink(final);
 		status = rename(original, final);
 		if (status < 0)
 			return -errno;
 
 		/* Symlink the intermediate to the final file.  */
+		(void) unlink(intermediate);
 		status = symlink(final, intermediate);
 		if (status < 0)
 			return -errno;
@@ -128,7 +131,7 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 		if (status < 0)
 			return -errno;
 	} else {
-		/*Move the original content to new location, by incrementing count at end of path. */
+		/* Move the original content to new location, by incrementing count at end of path. */
 		size = my_readlink(intermediate, final);
 		if (size < 0)
 			return size;
@@ -139,14 +142,13 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 		strncpy(new_final, final, strlen(final) - 4);
 		sprintf(new_final + strlen(final) - 4, "%04d", link_count);
 
+		(void) unlink(new_final);
 		status = rename(final, new_final);
 		if (status < 0)
 			return -errno;
 		strcpy(final, new_final);
 		/* Symlink the intermediate to the final file.  */
-		status = unlink(intermediate);
-		if (status < 0)
-			return -errno;
+		(void) unlink(intermediate);
 		status = symlink(final, intermediate);
 		if (status < 0)
 			return -errno;
@@ -194,7 +196,7 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 
 	size = my_readlink(original, intermediate);
 	if (size < 0)
-		return size;
+		return 0;
 
 	name = strrchr(intermediate, '/');
 	if (name == NULL)
@@ -208,7 +210,7 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 
 	size = my_readlink(intermediate, final);
 	if (size < 0)
-		return size;
+		return 0;
 
 	link_count = atoi(final + strlen(final) - 4);
 	link_count--;
@@ -225,21 +227,14 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 		strcpy(final, new_final);
 
 		/* Symlink the intermediate to the final file.  */
-		status = unlink(intermediate);
-		if (status < 0)
-			return -errno;
-
+		(void) unlink(intermediate);
 		status = symlink(final, intermediate);
 		if (status < 0)
 			return -errno;
 	} else {
 		/* If it is the last, delete the intermediate and final */
-		status = unlink(intermediate);
-		if (status < 0)
-			return -errno;
-		status = unlink(final);
-		if (status < 0)
-			return -errno;
+		(void) unlink(intermediate);
+		(void) unlink(final);
 	}
 
 	return 0;
