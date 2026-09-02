@@ -116,17 +116,17 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 		strcat(final, ".0002");
 		status = rename(original, final);
 		if (status < 0)
-			return status;
+			return -errno;
 
 		/* Symlink the intermediate to the final file.  */
 		status = symlink(final, intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 
 		/* Symlink the original path to the intermediate one.  */
-			status = symlink(intermediate, original);
-			if (status < 0)
-			return status;
+		status = symlink(intermediate, original);
+		if (status < 0)
+			return -errno;
 	} else {
 		/*Move the original content to new location, by incrementing count at end of path. */
 		size = my_readlink(intermediate, final);
@@ -141,15 +141,15 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 
 		status = rename(final, new_final);
 		if (status < 0)
-			return status;
+			return -errno;
 		strcpy(final, new_final);
 		/* Symlink the intermediate to the final file.  */
 		status = unlink(intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 		status = symlink(final, intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 	}
 
 	status = set_sysarg_path(tracee, intermediate, sysarg);
@@ -220,26 +220,26 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 
 		status = rename(final, new_final);
 		if (status < 0)
-			return status;
+			return -errno;
 
 		strcpy(final, new_final);
 
 		/* Symlink the intermediate to the final file.  */
 		status = unlink(intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 
 		status = symlink(final, intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 	} else {
 		/* If it is the last, delete the intermediate and final */
 		status = unlink(intermediate);
 		if (status < 0)
-			return status;
+			return -errno;
 		status = unlink(final);
 		if (status < 0)
-			return status;
+			return -errno;
 	}
 
 	return 0;
@@ -422,6 +422,8 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 		static FilteredSysnum filtered_sysnums[] = {
 			{ PR_link,		FILTER_SYSEXIT },
 			{ PR_linkat,		FILTER_SYSEXIT },
+			{ PR_symlink,		FILTER_SYSEXIT },
+			{ PR_symlinkat,		FILTER_SYSEXIT },
 			{ PR_unlink,		FILTER_SYSEXIT },
 			{ PR_unlinkat,		FILTER_SYSEXIT },
 			{ PR_fstat,		FILTER_SYSEXIT },
@@ -501,13 +503,23 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 			 * into:
 			 *
 			 *     int symlink(const char *oldpath, const char *newpath);
+			 * or on ARM64 (which lacks symlink):
+			 *     int symlinkat(const char *oldpath, int newdirfd, const char *newpath);
 			 */
 
 			status = move_and_symlink_path(tracee, SYSARG_1);
 			if (status < 0)
 				return status;
 
-			set_sysnum(tracee, PR_symlink);
+			if (detranslate_sysnum(get_abi(tracee), PR_symlink) != SYSCALL_AVOIDER) {
+				set_sysnum(tracee, PR_symlink);
+			} else {
+				/* ARM64: symlinkat(target, AT_FDCWD, linkpath) */
+				word_t linkpath = peek_reg(tracee, CURRENT, SYSARG_2);
+				poke_reg(tracee, SYSARG_2, (word_t)AT_FDCWD);
+				poke_reg(tracee, SYSARG_3, linkpath);
+				set_sysnum(tracee, PR_symlinkat);
+			}
 			break;
 
 		case PR_linkat:
@@ -519,6 +531,8 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 			 * into:
 			 *
 			 *     int symlink(const char *oldpath, const char *newpath);
+			 * or on ARM64:
+			 *     int symlinkat(const char *oldpath, int newdirfd, const char *newpath);
 			 *
 			 * Note: PRoot has already canonicalized
 			 * linkat() paths this way:
@@ -531,10 +545,19 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 			if (status < 0)
 				return status;
 
-			poke_reg(tracee, SYSARG_1, peek_reg(tracee, CURRENT, SYSARG_2));
-			poke_reg(tracee, SYSARG_2, peek_reg(tracee, CURRENT, SYSARG_4));
-
-			set_sysnum(tracee, PR_symlink);
+			if (detranslate_sysnum(get_abi(tracee), PR_symlink) != SYSCALL_AVOIDER) {
+				poke_reg(tracee, SYSARG_1, peek_reg(tracee, CURRENT, SYSARG_2));
+				poke_reg(tracee, SYSARG_2, peek_reg(tracee, CURRENT, SYSARG_4));
+				set_sysnum(tracee, PR_symlink);
+			} else {
+				/* ARM64: symlinkat(target, AT_FDCWD, linkpath) */
+				word_t target_path = peek_reg(tracee, CURRENT, SYSARG_2);
+				word_t link_path = peek_reg(tracee, CURRENT, SYSARG_4);
+				poke_reg(tracee, SYSARG_1, target_path);
+				poke_reg(tracee, SYSARG_2, (word_t)AT_FDCWD);
+				poke_reg(tracee, SYSARG_3, link_path);
+				set_sysnum(tracee, PR_symlinkat);
+			}
 			break;
 
 		default:
