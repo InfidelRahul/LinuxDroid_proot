@@ -151,7 +151,6 @@ void translate_brk_exit(Tracee *tracee)
 {
 	word_t result;
 	word_t sysnum;
-	int tracee_errno;
 
 	if (tracee->heap->disabled)
 		return;
@@ -160,7 +159,6 @@ void translate_brk_exit(Tracee *tracee)
 
 	sysnum = get_sysnum(tracee, MODIFIED);
 	result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-	tracee_errno = (int) result;
 
 	switch (sysnum) {
 	case PR_void:
@@ -172,7 +170,7 @@ void translate_brk_exit(Tracee *tracee)
 		/* On error, mmap(2) returns -errno (the last 4k is
 		 * reserved for this), whereas brk(2) returns the
 		 * previous value.  */
-		if (tracee_errno < 0 && tracee_errno > -4096) {
+		if ((word_t)result >= (word_t)-4095UL) {
 			poke_reg(tracee, SYSARG_RESULT, 0);
 			break;
 		}
@@ -187,7 +185,7 @@ void translate_brk_exit(Tracee *tracee)
 		/* On error, mremap(2) returns -errno (the last 4k is
 		 * reserved this), whereas brk(2) returns the previous
 		 * value.  */
-		if (   (tracee_errno < 0 && tracee_errno > -4096)
+		if (   ((word_t)result >= (word_t)-4095UL)
 		    || (tracee->heap->base != result + heap_offset)) {
 			poke_reg(tracee, SYSARG_RESULT, tracee->heap->base + tracee->heap->size);
 			break;

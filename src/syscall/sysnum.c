@@ -83,6 +83,9 @@ Sysnum translate_sysnum(Abi abi, word_t sysnum)
 	Sysnums sysnums;
 	word_t index;
 
+	if (sysnum == SYSCALL_AVOIDER || (int)sysnum == -1)
+		return PR_void;
+
 	get_sysnums(abi, &sysnums);
 
 	/* Sanity checks.  */
@@ -92,7 +95,7 @@ Sysnum translate_sysnum(Abi abi, word_t sysnum)
 	index = sysnum - sysnums.offset;
 
 	/* Sanity checks.  */
-	if (index > sysnums.length)
+	if (index >= sysnums.length)
 		return PR_void;
 
 	return sysnums.table[index];

@@ -275,6 +275,7 @@ void translate_syscall(Tracee *tracee)
 
 			set_sysnum(tracee, PR_void);
 			poke_reg(tracee, SYSARG_RESULT, (word_t) status);
+			save_current_regs(tracee, MODIFIED);
 			tracee->status = status;
 			if (tracee->seccomp == ENABLED) {
 				tracee->restart_how = PTRACE_SYSCALL;
@@ -327,7 +328,9 @@ void translate_syscall(Tracee *tracee)
 			(void) notify_extensions(tracee, SYSCALL_CHAINED_EXIT, 0, 0);
 
 		word_t final_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-		if ((int)final_result < 0 || prev_status < 0) {
+		bool is_error = (prev_status < 0) || ((word_t)final_result >= (word_t)-4095UL);
+		if (is_error) {
+			int err_no = (prev_status < 0) ? -prev_status : (int)(-(long)final_result);
 			word_t raw_sysnum = peek_reg(tracee, ORIGINAL, SYSARG_NUM);
 			char guest_path[PATH_MAX] = {0};
 			char host_path[PATH_MAX] = {0};
@@ -339,9 +342,9 @@ void translate_syscall(Tracee *tracee)
 			decode_syscall_args(tracee, orig_sysnum, guest_path, host_path, socket_info, &dirfd, &flags, &mode);
 
 			if (guest_path[0] != '\0' || host_path[0] != '\0' || socket_info[0] != '\0') {
-				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=%ld (errno=%d), dirfd=%ld, guest_path='%s', host_path='%s', flags=0x%lx, mode=0x%lx, socket='%s'",
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=0x%lx (errno=%d), dirfd=%ld, guest_path='%s', host_path='%s', flags=0x%lx, mode=0x%lx, socket='%s'",
 					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
-					(long)final_result, (int)(-((int)final_result)),
+					final_result, err_no,
 					dirfd, guest_path, host_path, flags, mode, socket_info);
 			} else {
 				word_t orig_arg1 = peek_reg(tracee, ORIGINAL, SYSARG_1);
@@ -350,9 +353,9 @@ void translate_syscall(Tracee *tracee)
 				word_t orig_arg4 = peek_reg(tracee, ORIGINAL, SYSARG_4);
 				word_t curr_arg1 = peek_reg(tracee, CURRENT, SYSARG_1);
 				word_t curr_arg2 = peek_reg(tracee, CURRENT, SYSARG_2);
-				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=%ld (errno=%d), orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx), curr_args=(0x%lx, 0x%lx)",
+				note(tracee, INFO, INTERNAL, "[SYSCALL_EXIT_ERR] pid=%d: sysnum=%ld (raw=%ld, %s) result=0x%lx (errno=%d), orig_args=(0x%lx, 0x%lx, 0x%lx, 0x%lx), curr_args=(0x%lx, 0x%lx)",
 					tracee->pid, (long)orig_sysnum, (long)raw_sysnum, stringify_sysnum(orig_sysnum),
-					(long)final_result, (int)(-((int)final_result)),
+					final_result, err_no,
 					orig_arg1, orig_arg2, orig_arg3, orig_arg4,
 					curr_arg1, curr_arg2);
 			}
