@@ -131,6 +131,7 @@ selftest: $(BUILD_DIR)/host/linuxdroid-selftest
 HOST_GNUMAKE := $(BUILD_DIR)/host/GNUmakefile
 
 $(BUILD_DIR)/host/proot: _talloc_host $(HOST_GNUMAKE)
+	@cp -rup src/. $(BUILD_DIR)/host/
 	@echo "  BUILD host proot"
 	@$(MAKE) -C $(BUILD_DIR)/host -f GNUmakefile \
 		CC=$(HOST_CC) STRIP=$(HOST_STRIP) OBJCOPY=$(HOST_OBJCOPY) OBJDUMP=$(HOST_OBJDUMP) \
@@ -169,6 +170,7 @@ ANDROID_ABIS := android-arm64 android-x86_64
 define android_build_abi
 .PHONY: $1
 $1: .ndk-check _talloc_$2 $$(BUILD_DIR)/$2/GNUmakefile
+	@cp -rup src/. $$(BUILD_DIR)/$2/
 	@echo "  BUILD $1 ($$(shell uname -m) -> $2)"
 	@$$(MAKE) -C $$(BUILD_DIR)/$2 -f GNUmakefile \
 		CC=$(NDK_LLVM)/bin/$3$(ANDROID_API)-clang \
