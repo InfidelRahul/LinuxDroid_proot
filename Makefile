@@ -165,7 +165,7 @@ $(BUILD_DIR)/host/linuxdroid-selftest: tools/selftest/linuxdroid-selftest.c
 # Each ABI builds its own talloc and its own copy of the upstream tree,
 # then links with -fPIE -pie as required by modern Android.
 # ---------------------------------------------------------------------------
-ANDROID_ABIS := android-arm64 android-x86_64
+ANDROID_ABIS := android-arm64
 
 define android_build_abi
 .PHONY: $1
@@ -205,10 +205,8 @@ _talloc_$1:
 endef
 
 $(eval $(call android_talloc_abi,arm64-v8a,aarch64-linux-android))
-$(eval $(call android_talloc_abi,x86_64,x86_64-linux-android))
 
 $(eval $(call android_build_abi,android-arm64,arm64-v8a,aarch64-linux-android))
-$(eval $(call android_build_abi,android-x86_64,x86_64,x86_64-linux-android))
 
 $(BUILD_DIR)/arm64-v8a/GNUmakefile: | $(BUILD_DIR)/arm64-v8a
 	@cp -r src/. $(BUILD_DIR)/arm64-v8a/
@@ -219,16 +217,6 @@ $(BUILD_DIR)/arm64-v8a/GNUmakefile: | $(BUILD_DIR)/arm64-v8a
 
 $(BUILD_DIR)/arm64-v8a:
 	@mkdir -p $(BUILD_DIR)/arm64-v8a
-
-$(BUILD_DIR)/x86_64/GNUmakefile: | $(BUILD_DIR)/x86_64
-	@cp -r src/. $(BUILD_DIR)/x86_64/
-	@mkdir -p $(BUILD_DIR)/lib
-	@cp -r lib/uthash $(BUILD_DIR)/lib/uthash
-	@mkdir -p $(BUILD_DIR)/native
-	@cp -r $(NATIVE_ANDROID) $(BUILD_DIR)/native/android
-
-$(BUILD_DIR)/x86_64:
-	@mkdir -p $(BUILD_DIR)/x86_64
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -296,16 +284,14 @@ release: proot loader
 # This is the exact tree consumed by LinuxDroid's RuntimeAssetsManager.
 # ---------------------------------------------------------------------------
 .PHONY: android-release
-android-release: android-arm64 android-x86_64
+android-release: android-arm64
 	@set -e; \
-	for abi in arm64-v8a x86_64; do \
-		mkdir -p "$(BUILD_DIR)/android-release/$$abi"; \
-		cp "$(BUILD_DIR)/android/$$abi/proot" "$(BUILD_DIR)/android-release/$$abi/proot"; \
-		test -f "$(BUILD_DIR)/android/$$abi/loader" || { \
-			echo "Error: $(BUILD_DIR)/android/$$abi/loader is missing"; exit 1; }; \
-		cp "$(BUILD_DIR)/android/$$abi/loader" "$(BUILD_DIR)/android-release/$$abi/loader"; \
-	done
-	@$(call write_manifest, \
+	mkdir -p "$(BUILD_DIR)/android-release/arm64-v8a"; \
+	cp "$(BUILD_DIR)/android/arm64-v8a/proot" "$(BUILD_DIR)/android-release/arm64-v8a/proot"; \
+	test -f "$(BUILD_DIR)/android/arm64-v8a/loader" || { \
+		echo "Error: $(BUILD_DIR)/android/arm64-v8a/loader is missing"; exit 1; }; \
+	cp "$(BUILD_DIR)/android/arm64-v8a/loader" "$(BUILD_DIR)/android-release/arm64-v8a/loader"
+	$(call write_manifest, \
 		$(BUILD_DIR)/android-release/arm64-v8a/MANIFEST.txt, \
 		arm64-v8a, \
 		aarch64, \
@@ -313,14 +299,6 @@ android-release: android-arm64 android-x86_64
 		$(NDK_ROOT), \
 		$(BUILD_DIR)/android-release/arm64-v8a/proot, \
 		$(BUILD_DIR)/android-release/arm64-v8a/loader)
-	@$(call write_manifest, \
-		$(BUILD_DIR)/android-release/x86_64/MANIFEST.txt, \
-		x86_64, \
-		x86_64, \
-		$(NDK_LLVM)/bin/x86_64-linux-android$(ANDROID_API)-clang, \
-		$(NDK_ROOT), \
-		$(BUILD_DIR)/android-release/x86_64/proot, \
-		$(BUILD_DIR)/android-release/x86_64/loader)
 	@echo "  OK android release -> $(BUILD_DIR)/android-release"
 
 # ---------------------------------------------------------------------------
