@@ -247,9 +247,11 @@ $(eval $(call define_from_arch.h,$1,LOADER_ARCH_CFLAGS))
 $(eval $(call define_from_arch.h,$1,LOADER_ADDRESS))
 
 LOADER_ADDR_OPT := $(shell if $(CC) -Wl,--image-base=0x1000 -nostdlib -x c /dev/null -o /dev/null 2>/dev/null; then echo "--image-base="; else echo "-Ttext="; fi)
+LOADER_PIE      := $(shell if $(CC) -static-pie -nostdlib -x c /dev/null -o /dev/null 2>/dev/null; then echo "-static-pie"; else echo "-static"; fi)
+LOADER_PAGE_SIZE := $(shell if $(CC) -Wl,-z,max-page-size=16384 -nostdlib -x c /dev/null -o /dev/null 2>/dev/null; then echo ",-z,max-page-size=16384"; fi)
 
 LOADER_CFLAGS$1  += -fPIC -ffreestanding $(LOADER_ARCH_CFLAGS$1)
-LOADER_LDFLAGS$1 += -static -nostdlib -Wl$(BUILD_ID_NONE),$$(LOADER_ADDR_OPT)$(LOADER_ADDRESS$1),-z,noexecstack
+LOADER_LDFLAGS$1 += $$(LOADER_PIE) -nostdlib -Wl$(BUILD_ID_NONE),$$(LOADER_ADDR_OPT)$(LOADER_ADDRESS$1)$$(LOADER_PAGE_SIZE),-z,noexecstack
 
 loader/loader$1.o: loader/loader.c
 	@mkdir -p $$(dir $$@)
