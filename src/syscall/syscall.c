@@ -327,6 +327,10 @@ void translate_syscall(Tracee *tracee)
 		else
 			(void) notify_extensions(tracee, SYSCALL_CHAINED_EXIT, 0, 0);
 
+		if (prev_status < 0) {
+			poke_reg(tracee, SYSARG_RESULT, (word_t) prev_status);
+		}
+
 		word_t final_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 		bool is_error = (prev_status < 0) || ((word_t)final_result >= (word_t)-4095UL);
 		if (is_error) {

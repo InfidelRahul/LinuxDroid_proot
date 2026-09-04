@@ -543,6 +543,14 @@ int translate_syscall_enter(Tracee *tracee)
 		if (status < 0)
 			break;
 
+		/* If complex RESOLVE_* flags are specified (e.g. RESOLVE_BENEATH, RESOLVE_IN_ROOT),
+		 * standard openat cannot enforce them rootlessly. Return -ENOSYS so the C library
+		 * falls back cleanly to openat or handles the limitation. */
+		if (how.resolve != 0) {
+			status = -ENOSYS;
+			break;
+		}
+
 		set_sysnum(tracee, PR_openat);
 		poke_reg(tracee, SYSARG_3, (word_t) how.flags);
 		poke_reg(tracee, SYSARG_4, (word_t) how.mode);
@@ -650,9 +658,7 @@ int translate_syscall_enter(Tracee *tracee)
 
 	case PR_unshare:
 	case PR_setns:
-		poke_reg(tracee, SYSARG_RESULT, 0);
-		set_sysnum(tracee, PR_void);
-		status = 0;
+		status = -EPERM;
 		break;
 	}
 
