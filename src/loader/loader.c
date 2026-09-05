@@ -286,7 +286,7 @@ static void loader_sigsegv_handler(int sig, siginfo_t *info, void *ucontext_ptr)
 void _start(void *cursor)
 {
 #if defined(ARCH_ARM64)
-	/* 15. Install minimal diagnostic signal handler for SIGSEGV */
+	/* Install minimal diagnostic signal handler for SIGSEGV */
 	struct __kernel_sigaction sa;
 	clear((word_t)&sa, (word_t)&sa + sizeof(sa));
 	sa.sa_handler = (void *)loader_sigsegv_handler;
@@ -299,30 +299,28 @@ void _start(void *cursor)
 	pid = SYSCALL_0(GETPID);
 #endif
 
-	/* 16. LOADER_RUNTIME */
-	word_t loader_entry = (word_t)&_start;
-	word_t loader_base = loader_entry & ~0x3fff;
-	while (*(unsigned int *)loader_base != 0x464c457f && loader_base > 0x1000) {
-		loader_base -= 0x4000;
-		if (loader_entry - loader_base > 0x100000) {
-			loader_base = loader_entry & ~0xffff;
-			break;
-		}
-	}
-	loader_log_str("[LOADER_RUNTIME] pid=");
-	loader_log_dec(pid);
-	loader_log_str(" loader_base=");
-	loader_log_hex(loader_base);
-	loader_log_str(" loader_entry=");
-	loader_log_hex(loader_entry);
-	loader_log_str("\n");
-
-	/* 11. LOADER_START - Before dereferencing cursor */
-	loader_log_str("[LOADER_START] pid=");
+	/* 2. Add exactly one first-entry marker before dereferencing cursor */
+	loader_log_str("[LOADER_ENTER] pid=");
 	loader_log_dec(pid);
 	loader_log_str(" cursor=");
 	loader_log_hex((word_t)cursor);
 	loader_log_str("\n");
+
+	/* 5. Minimal LoadStatement layout diagnostics */
+	loader_log_str("[LOADER_LAYOUT] sizeof_LoadStatement=");
+	loader_log_dec(sizeof(LoadStatement));
+	loader_log_str(" offsetof_action=");
+	loader_log_dec(offsetof(LoadStatement, action));
+	loader_log_str(" offsetof_start=");
+	loader_log_dec(offsetof(LoadStatement, start));
+	loader_log_str(" offsetof_stack_pointer=");
+	loader_log_dec(offsetof(LoadStatement, start.stack_pointer));
+	loader_log_str(" offsetof_entry_point=");
+	loader_log_dec(offsetof(LoadStatement, start.entry_point));
+	loader_log_str(" offsetof_at_execfn=");
+	loader_log_dec(offsetof(LoadStatement, start.at_execfn));
+	loader_log_str("\n");
+
 	bool traced = false;
 	bool reset_at_base = true;
 	word_t at_base = 0;
@@ -331,20 +329,25 @@ void _start(void *cursor)
 	word_t status;
 
 	while(1) {
-		/* Log cursor before accessing stmt->action (Section 11) */
-		loader_log_str("[LOADER_STATEMENT] pid=");
+		LoadStatement *stmt = cursor;
+
+		/* 3. Add one marker before reading stmt->action */
+		loader_log_str("[LOADER_ACTION_READ_BEGIN] pid=");
 		loader_log_dec(pid);
 		loader_log_str(" cursor=");
 		loader_log_hex((word_t)cursor);
-
-		LoadStatement *stmt = cursor;
-		loader_log_str(" action=");
-		loader_log_dec(stmt->action);
-		loader_log_str(" sizeof_LoadStatement=");
-		loader_log_dec(sizeof(LoadStatement));
 		loader_log_str("\n");
 
-		switch (stmt->action) {
+		word_t action = stmt->action;
+
+		/* 3. Add one marker immediately after successfully reading action */
+		loader_log_str("[LOADER_ACTION_READ] pid=");
+		loader_log_dec(pid);
+		loader_log_str(" action=");
+		loader_log_dec(action);
+		loader_log_str("\n");
+
+		switch (action) {
 		case LOAD_ACTION_OPEN_NEXT:
 			status = SYSCALL(CLOSE, 1, fd);
 			if (unlikely((int) status < 0))
@@ -406,6 +409,11 @@ void _start(void *cursor)
 			/* Fall through.  */
 
 		case LOAD_ACTION_START: {
+			/* 4. Add one marker when START is selected */
+			loader_log_str("[LOADER_START_CASE] pid=");
+			loader_log_dec(pid);
+			loader_log_str("\n");
+
 			/* 12. LOADER_START_STATEMENT */
 			loader_log_str("[LOADER_START_STATEMENT] pid=");
 			loader_log_dec(pid);

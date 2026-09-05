@@ -402,6 +402,15 @@ static int transfer_load_script(Tracee *tracee)
 	/* Log the generated LoadStatement right before writing to tracee memory */
 	log_load_statement_diag(tracee, start_statement);
 
+	note(tracee, INFO, INTERNAL,
+		"[PROOT_LOAD_LAYOUT] sizeof_LoadStatement=%zu offsetof_action=%zu offsetof_start=%zu offsetof_stack_pointer=%zu offsetof_entry_point=%zu offsetof_at_execfn=%zu",
+		sizeof(LoadStatement),
+		offsetof(LoadStatement, action),
+		offsetof(LoadStatement, start),
+		offsetof(LoadStatement, start.stack_pointer),
+		offsetof(LoadStatement, start.entry_point),
+		offsetof(LoadStatement, start.at_execfn));
+
 	/* Log registers before SP/X0 modification */
 	note(tracee, INFO, INTERNAL, "[REGS_BEFORE_EXEC] pid=%d, pc=0x%lx, sp=0x%lx, x0=0x%lx, x1=0x%lx, x2=0x%lx, x8=0x%lx",
 		tracee->pid,
