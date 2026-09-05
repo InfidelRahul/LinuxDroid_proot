@@ -89,10 +89,27 @@
 			result;						\
 	})
 
+#define SYSCALL_0(number_)						\
+	({								\
+		register word_t number asm("x8") = number_;		\
+		register word_t result asm("x0");			\
+		asm volatile (						\
+			"svc #0x00000000		\n\t"	\
+			: "=r" (result)				\
+			: "r" (number)				\
+			: "memory");				\
+		result;						\
+	})
+
 #define OPENAT	56
 #define CLOSE	57
+#define READ    63
+#define WRITE   64
 #define MMAP	222
 #define EXECVE	221
 #define EXIT	93
 #define PRCTL   167
 #define MPROTECT 226
+#define GETPID  172
+#define RT_SIGACTION 134
+

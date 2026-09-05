@@ -41,6 +41,8 @@
 #include "path/binding.h"
 #include "path/temp.h"
 #include "cli/note.h"
+#include <stddef.h>
+#include <inttypes.h>
 
 
 /**
@@ -167,6 +169,32 @@ static void *transcript_mappings(void *cursor, const Mapping *mappings)
 	return cursor;
 }
 
+static void log_load_statement_diag(const Tracee *tracee, const LoadStatement *start_stmt)
+{
+	note(tracee, INFO, INTERNAL,
+		"[LOAD_STATEMENT] pid=%d, action=%lu, stack_pointer=0x%lx, entry_point=0x%lx, at_phdr=0x%lx, at_phent=%lu, at_phnum=%lu, at_entry=0x%lx, at_execfn=0x%lx, "
+		"sizeof_LoadStatement=%zu, offsetof_action=%zu, offsetof_start_stack_pointer=%zu, offsetof_start_entry_point=%zu, "
+		"offsetof_start_at_phdr=%zu, offsetof_start_at_phent=%zu, offsetof_start_at_phnum=%zu, offsetof_start_at_entry=%zu, offsetof_start_at_execfn=%zu",
+		tracee->pid,
+		(unsigned long)start_stmt->action,
+		(unsigned long)start_stmt->start.stack_pointer,
+		(unsigned long)start_stmt->start.entry_point,
+		(unsigned long)start_stmt->start.at_phdr,
+		(unsigned long)start_stmt->start.at_phent,
+		(unsigned long)start_stmt->start.at_phnum,
+		(unsigned long)start_stmt->start.at_entry,
+		(unsigned long)start_stmt->start.at_execfn,
+		sizeof(LoadStatement),
+		offsetof(LoadStatement, action),
+		offsetof(LoadStatement, start.stack_pointer),
+		offsetof(LoadStatement, start.entry_point),
+		offsetof(LoadStatement, start.at_phdr),
+		offsetof(LoadStatement, start.at_phent),
+		offsetof(LoadStatement, start.at_phnum),
+		offsetof(LoadStatement, start.at_entry),
+		offsetof(LoadStatement, start.at_execfn));
+}
+
 /**
  * Convert @tracee->load_info into a load script, then transfer this
  * latter into @tracee's memory.
@@ -176,6 +204,24 @@ static int transfer_load_script(Tracee *tracee)
 	const word_t stack_pointer = peek_reg(tracee, CURRENT, STACK_POINTER);
 	static word_t page_size = 0;
 	static word_t page_mask = 0;
+
+	note(tracee, INFO, INTERNAL, "[LOAD_SCRIPT_PREP] pid=%d, vpid=%" PRIu64 ", architecture=%s, original_sp=0x%lx, user_path='%s', interpreter_path='%s'",
+		tracee->pid,
+		tracee->vpid,
+#if defined(ARCH_ARM64)
+		is_32on64_mode(tracee) ? "arm" : "aarch64",
+#elif defined(ARCH_X86_64)
+		is_32on64_mode(tracee) ? "x86" : "x86_64",
+#elif defined(ARCH_ARM_EABI)
+		"arm",
+#elif defined(ARCH_X86)
+		"x86",
+#else
+		"unknown",
+#endif
+		(unsigned long)stack_pointer,
+		(tracee->load_info && tracee->load_info->user_path) ? tracee->load_info->user_path : "(null)",
+		(tracee->load_info && tracee->load_info->interp && tracee->load_info->interp->user_path) ? tracee->load_info->interp->user_path : "none");
 
 	word_t entry_point;
 
@@ -249,6 +295,19 @@ static int transfer_load_script(Tracee *tracee)
 	/* Allocate enough room for both the load script and the
 	 * strings area.  */
 	buffer_size = script_size + strings_size;
+
+	note(tracee, INFO, INTERNAL, "[LOAD_SCRIPT_LAYOUT] pid=%d, original_sp=0x%lx, new_sp=0x%lx, buffer_size=%zu, script_size=%zu, strings_size=%zu, load_script_address=0x%lx, string1_address=0x%lx, string2_address=0x%lx, string3_address=0x%lx",
+		tracee->pid,
+		(unsigned long)stack_pointer,
+		(unsigned long)(stack_pointer - buffer_size),
+		buffer_size,
+		script_size,
+		strings_size,
+		(unsigned long)(stack_pointer - buffer_size),
+		(unsigned long)string1_address,
+		(unsigned long)string2_address,
+		(unsigned long)string3_address);
+
 	buffer = talloc_zero_size(tracee->ctx, buffer_size);
 	if (buffer == NULL)
 		return -ENOMEM;
@@ -293,6 +352,7 @@ static int transfer_load_script(Tracee *tracee)
 
 	/* Load script statement: start.  */
 	statement = cursor;
+	LoadStatement *start_statement = statement;
 
 	/* Start of the program slightly differs when ptraced.  */
 	if (tracee->as_ptracee.ptracer != NULL)
@@ -339,6 +399,19 @@ static int transfer_load_script(Tracee *tracee)
 	cursor += padding_size;
 	assert((uintptr_t) cursor - (uintptr_t) buffer == buffer_size);
 
+	/* Log the generated LoadStatement right before writing to tracee memory */
+	log_load_statement_diag(tracee, start_statement);
+
+	/* Log registers before SP/X0 modification */
+	note(tracee, INFO, INTERNAL, "[REGS_BEFORE_EXEC] pid=%d, pc=0x%lx, sp=0x%lx, x0=0x%lx, x1=0x%lx, x2=0x%lx, x8=0x%lx",
+		tracee->pid,
+		(unsigned long)peek_reg(tracee, CURRENT, INSTR_POINTER),
+		(unsigned long)peek_reg(tracee, CURRENT, STACK_POINTER),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_1),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_2),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_3),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_NUM));
+
 	/* Allocate enough room in tracee's memory for the load
 	 * script, and make the first user argument points to this
 	 * location.  Note that it is safe to update the stack pointer
@@ -348,10 +421,31 @@ static int transfer_load_script(Tracee *tracee)
 	poke_reg(tracee, STACK_POINTER, stack_pointer - buffer_size);
 	poke_reg(tracee, USERARG_1, stack_pointer - buffer_size);
 
+	/* Log registers immediately after SP/X0 modification */
+	note(tracee, INFO, INTERNAL, "[REGS_MODIFIED] pid=%d, pc=0x%lx, sp=0x%lx, x0=0x%lx, x1=0x%lx, x2=0x%lx, x8=0x%lx",
+		tracee->pid,
+		(unsigned long)peek_reg(tracee, CURRENT, INSTR_POINTER),
+		(unsigned long)peek_reg(tracee, CURRENT, STACK_POINTER),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_1),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_2),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_3),
+		(unsigned long)peek_reg(tracee, CURRENT, SYSARG_NUM));
+
+	/* Log load-script memory write */
+	note(tracee, INFO, INTERNAL, "[LOAD_SCRIPT_WRITE_BEGIN] pid=%d, address=0x%lx, size=%zu",
+		tracee->pid, (unsigned long)(stack_pointer - buffer_size), buffer_size);
+
 	/* Copy everything in the tracee's memory at once.  */
 	status = write_data(tracee, stack_pointer - buffer_size, buffer, buffer_size);
-	if (status < 0)
+	if (status < 0) {
+		int saved_errno = -status;
+		note(tracee, ERROR, INTERNAL, "[LOAD_SCRIPT_WRITE_FAIL] pid=%d, address=0x%lx, size=%zu, errno=%d, error='%s'",
+			tracee->pid, (unsigned long)(stack_pointer - buffer_size), buffer_size, saved_errno, strerror(saved_errno));
 		return status;
+	}
+
+	note(tracee, INFO, INTERNAL, "[LOAD_SCRIPT_WRITE_COMPLETE] pid=%d, address=0x%lx, size=%zu",
+		tracee->pid, (unsigned long)(stack_pointer - buffer_size), buffer_size);
 
 	/* Tracee's stack content is now as follow:
 	 *

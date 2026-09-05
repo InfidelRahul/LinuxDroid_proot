@@ -300,6 +300,15 @@ int push_regs(Tracee *tracee)
 		}
 
 #if defined(ARCH_ARM64)
+		note(tracee, INFO, INTERNAL, "[REGS_PUSH_BEGIN] pid=%d, pc=0x%lx, sp=0x%lx, x0=0x%lx, x1=0x%lx, x2=0x%lx, x8=0x%lx",
+			tracee->pid,
+			(unsigned long)peek_reg(tracee, CURRENT, INSTR_POINTER),
+			(unsigned long)peek_reg(tracee, CURRENT, STACK_POINTER),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_1),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_2),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_3),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_NUM));
+
 		struct iovec regs;
 		word_t current_sysnum = REG(tracee, CURRENT, SYSARG_NUM);
 
@@ -310,16 +319,61 @@ int push_regs(Tracee *tracee)
 			int syscallno = (int) current_sysnum;
 			regs.iov_base = &syscallno;
 			regs.iov_len = sizeof(syscallno);
+			note(tracee, INFO, INTERNAL, "[REGS_PUSH_SYSTEM_CALL_BEGIN] pid=%d, syscall_number=%d",
+				tracee->pid, syscallno);
 			status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_ARM_SYSTEM_CALL, &regs);
-			if (status < 0)
+			if (status < 0) {
+				int saved_errno = errno;
+				note(tracee, ERROR, INTERNAL, "[REGS_PUSH_SYSTEM_CALL_FAIL] pid=%d, errno=%d, error='%s'",
+					tracee->pid, saved_errno, strerror(saved_errno));
 				note(tracee, WARNING, SYSTEM, "can't set the syscall number");
+			} else {
+				note(tracee, INFO, INTERNAL, "[REGS_PUSH_SYSTEM_CALL_COMPLETE] pid=%d, syscall_number=%d",
+					tracee->pid, syscallno);
+			}
 		}
 
 		/* Update other registers.  */
 		regs.iov_base = &tracee->_regs[CURRENT];
 		regs.iov_len  = sizeof(tracee->_regs[CURRENT]);
 
+		note(tracee, INFO, INTERNAL, "[REGS_PUSH_NT_PRSTATUS_BEGIN] pid=%d, pc=0x%lx, sp=0x%lx, x0=0x%lx, x1=0x%lx, x2=0x%lx, x8=0x%lx",
+			tracee->pid,
+			(unsigned long)peek_reg(tracee, CURRENT, INSTR_POINTER),
+			(unsigned long)peek_reg(tracee, CURRENT, STACK_POINTER),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_1),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_2),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_3),
+			(unsigned long)peek_reg(tracee, CURRENT, SYSARG_NUM));
+
 		status = ptrace(PTRACE_SETREGSET, tracee->pid, NT_PRSTATUS, &regs);
+		if (status < 0) {
+			int saved_errno = errno;
+			note(tracee, ERROR, INTERNAL, "[REGS_PUSH_NT_PRSTATUS_FAIL] pid=%d, errno=%d, error='%s'",
+				tracee->pid, saved_errno, strerror(saved_errno));
+		} else {
+			note(tracee, INFO, INTERNAL, "[REGS_PUSH_NT_PRSTATUS_COMPLETE] pid=%d", tracee->pid);
+		}
+
+		note(tracee, INFO, INTERNAL, "[REGS_PUSH_COMPLETE] pid=%d", tracee->pid);
+
+		if (status == 0) {
+			struct user_regs_struct actual_regs;
+			struct iovec actual_iov = {
+				.iov_base = &actual_regs,
+				.iov_len = sizeof(actual_regs),
+			};
+			if (ptrace(PTRACE_GETREGSET, tracee->pid, NT_PRSTATUS, &actual_iov) == 0) {
+				note(tracee, INFO, INTERNAL, "[REGS_AFTER_EXEC] pid=%d, pc=0x%llx, sp=0x%llx, x0=0x%llx, x1=0x%llx, x2=0x%llx, x8=0x%llx",
+					tracee->pid,
+					(unsigned long long)actual_regs.pc,
+					(unsigned long long)actual_regs.sp,
+					(unsigned long long)actual_regs.regs[0],
+					(unsigned long long)actual_regs.regs[1],
+					(unsigned long long)actual_regs.regs[2],
+					(unsigned long long)actual_regs.regs[8]);
+			}
+		}
 #else
 #    if defined(ARCH_ARM_EABI)
 		/* On ARM, a special ptrace request is required to
