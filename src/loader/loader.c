@@ -135,13 +135,18 @@ static inline word_t loader_strlen(const char *s)
 
 static inline void loader_write_raw(int fd, const void *buf, word_t len)
 {
+#if defined(WRITE)
 	if (len > 0) {
 		SYSCALL(WRITE, 3, fd, (word_t)buf, len);
 	}
+#else
+	(void)fd; (void)buf; (void)len;
+#endif
 }
 
 static int loader_get_log_fd(void)
 {
+#if defined(OPENAT) && defined(READ) && defined(CLOSE)
 	static int cached_log_fd = -2;
 	if (cached_log_fd != -2) return cached_log_fd;
 
@@ -171,6 +176,9 @@ static int loader_get_log_fd(void)
 		}
 	}
 	return cached_log_fd;
+#else
+	return -1;
+#endif
 }
 
 static inline void loader_log_raw(const void *buf, word_t len)

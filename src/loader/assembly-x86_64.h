@@ -56,6 +56,10 @@
 	register word_t arg2 asm("rsi") = arg2_;	\
 	register word_t arg3 asm("rdx") = arg3_;	\
 
+#define PREPARE_ARGS_4(arg1_, arg2_, arg3_, arg4_)	\
+	PREPARE_ARGS_3(arg1_, arg2_, arg3_)		\
+	register word_t arg4 asm("r10") = arg4_;
+
 #define PREPARE_ARGS_6(arg1_, arg2_, arg3_, arg4_, arg5_, arg6_)	\
 	PREPARE_ARGS_3(arg1_, arg2_, arg3_)				\
 	register word_t arg4 asm("r10") = arg4_;			\
@@ -69,9 +73,25 @@
 	OUTPUT_CONTRAINTS_1,			\
 	"r" (arg2), "r" (arg3)
 
+#define OUTPUT_CONTRAINTS_4			\
+	OUTPUT_CONTRAINTS_3,			\
+	"r" (arg4)
+
 #define OUTPUT_CONTRAINTS_6			\
 	OUTPUT_CONTRAINTS_3,			\
 	"r" (arg4), "r" (arg5), "r" (arg6)
+
+#define SYSCALL_0(number_)						\
+	({								\
+		register word_t number asm("rax") = number_;		\
+		register word_t result asm("rax");			\
+		asm volatile (						\
+			"syscall		\n\t"		\
+			: "=r" (result)					\
+			: "r" (number)					\
+			: "memory", "cc", "rcx", "r11");		\
+		result;							\
+	})
 
 #define SYSCALL(number_, nb_args, args...)				\
 	({								\
@@ -87,10 +107,15 @@
 			result;						\
 	})
 
+#define READ	0
+#define WRITE	1
 #define OPEN	2
 #define CLOSE	3
 #define MMAP	9
+#define MPROTECT 10
+#define RT_SIGACTION 13
+#define GETPID	39
 #define EXECVE	59
 #define EXIT	60
 #define PRCTL	157
-#define MPROTECT 10
+#define OPENAT	257
